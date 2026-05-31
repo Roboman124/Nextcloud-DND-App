@@ -1,0 +1,41 @@
+name: Bug report
+description: Something in Grimoire isn't working
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: nextcloud
+    attributes:
+      label: Nextcloud version
+      placeholder: e.g. 33.0.3
+    validations:
+      required: true
+  - type: input
+    id: grimoire
+    attributes:
+      label: Grimoire version
+      placeholder: e.g. 0.3.0
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Where did it happen?
+      options:
+        - Campaign list
+        - 2D room
+        - 3D room
+        - Dice
+        - A plugin/addon
+        - Install / enable
+        - Other
+  - type: textarea
+    id: console
+    attributes:
+      label: Browser console / server log output
+      description: Any red errors from DevTools console, or relevant lines from `occ log:tail`.
+      render: shell

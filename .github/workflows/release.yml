@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Build & package app
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install & build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package app tarball
+        run: |
+          # Nextcloud expects the app folder name to equal the app id.
+          mkdir -p build/grimoire
+          rsync -a --exclude-from=.releaseignore ./ build/grimoire/
+          cd build
+          tar -czf grimoire.tar.gz grimoire
+          echo "Packaged build/grimoire.tar.gz"
+          tar -tzf grimoire.tar.gz | head -20
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/grimoire.tar.gz
+          body: |
+            Grimoire ${{ github.ref_name }}
+
+            Install on Nextcloud:
+            1. Extract `grimoire.tar.gz` into your Nextcloud `custom_apps/` (or `apps/`) directory.
+            2. `php occ app:enable grimoire`
+
+            The tarball already contains the built `js/` and `css/` bundles —
+            no build step required on the server.

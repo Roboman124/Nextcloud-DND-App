@@ -1,0 +1,8 @@
+{
+  "name": "Initiative Tracker",
+  "version": "1.0.0",
+  "author": "Grimoire examples",
+  "icon": "https://example.com/icons/initiative.svg",
+  "main": "https://example.com/addons/initiative/index.html",
+  "permissions": ["scene:read", "tool", "broadcast", "metadata", "dice"]
+}

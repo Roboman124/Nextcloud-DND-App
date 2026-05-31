@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<!--
+  Grimoire — a virtual tabletop for Nextcloud.
+  App ID must match the containing directory name: "grimoire".
+-->
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+    <id>grimoire</id>
+    <name>Grimoire</name>
+    <summary>A self-hosted virtual tabletop for D&amp;D and other TTRPGs</summary>
+    <description><![CDATA[
+Grimoire is a virtual tabletop (VTT) built into Nextcloud. Run campaigns and
+live sessions with shared 2D battlemaps and a physics-driven 3D mode where you
+can load glTF character models and build maps in three dimensions.
+
+Features
+- Campaigns and scenes, stored in your own Nextcloud
+- 2D mode: maps, tokens, drawings, fog of war, grid
+- 3D mode: glTF/GLB models, 3D map building, orbit camera
+- Physics 3D dice (d4–d20) with real settle-and-read results
+- Tools: pointer, grab, measurement, area-of-effect templates
+- Real-time multiplayer rooms
+- Addon/extension system so the table can be extended over time
+    ]]></description>
+    <version>0.3.0</version>
+    <licence>agpl</licence>
+    <author>CHANGE-ME</author>
+    <namespace>Grimoire</namespace>
+    <category>games</category>
+    <category>multimedia</category>
+    <bugs>https://github.com/CHANGE-ME/grimoire/issues</bugs>
+    <dependencies>
+        <nextcloud min-version="28" max-version="33"/>
+    </dependencies>
+    <navigations>
+        <navigation>
+            <name>Grimoire</name>
+            <route>grimoire.page.index</route>
+            <order>10</order>
+            <icon>app.svg</icon>
+        </navigation>
+    </navigations>
+</info>

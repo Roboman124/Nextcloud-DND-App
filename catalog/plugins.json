@@ -1,0 +1,16 @@
+{
+  "$schema": "./plugins.schema.json",
+  "version": 1,
+  "updated": "2026-05-31",
+  "plugins": [
+    {
+      "name": "Initiative Tracker",
+      "author": "Grimoire examples",
+      "description": "Rolls a real physics d20 for every token on the table, sorts them into initiative order, and broadcasts the result to the room.",
+      "manifestUrl": "https://raw.githubusercontent.com/CHANGE-ME/grimoire/main/examples/initiative-tracker/manifest.json",
+      "homepage": "https://github.com/CHANGE-ME/grimoire/tree/main/examples/initiative-tracker",
+      "tags": ["combat", "official-example"],
+      "permissions": ["scene:read", "tool", "broadcast", "metadata", "dice"]
+    }
+  ]
+}

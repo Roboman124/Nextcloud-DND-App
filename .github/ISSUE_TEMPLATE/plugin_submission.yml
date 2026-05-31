@@ -1,0 +1,25 @@
+name: Plugin submission
+description: List your plugin in the community catalog (or open a PR editing catalog/plugins.json directly)
+labels: [plugin-submission]
+body:
+  - type: input
+    id: name
+    attributes:
+      label: Plugin name
+    validations:
+      required: true
+  - type: input
+    id: manifest
+    attributes:
+      label: Manifest URL (https://...)
+    validations:
+      required: true
+  - type: textarea
+    id: desc
+    attributes:
+      label: Description (10-280 chars)
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "See docs/PLUGIN_CATALOG.md. A PR editing catalog/plugins.json is faster than an issue."

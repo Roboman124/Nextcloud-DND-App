@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: Build frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build bundle
+        run: npm run build
+
+      - name: Verify build output exists
+        run: |
+          test -f js/grimoire-main.js || (echo "::error::js/grimoire-main.js missing after build" && exit 1)
+          test -f css/grimoire-style.css || (echo "::error::css/grimoire-style.css missing after build" && exit 1)
+          echo "Build output OK"
+
+  validate-catalog:
+    name: Validate plugin catalog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate catalog/plugins.json against schema
+        run: |
+          npm i -g ajv-cli@5
+          ajv validate \
+            -s catalog/plugins.schema.json \
+            -d catalog/plugins.json \
+            --strict=false

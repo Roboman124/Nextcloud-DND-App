@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+server/node_modules/
+
+# Build output is committed for release tarballs but ignored during dev.
+# If you prefer to commit built assets (so the app runs without a build step),
+# delete the two lines below.
+# js/grimoire-main.js
+# css/grimoire-style.css
+
+# Editor / OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/
+*.log
+
+# Local env
+.env
+.env.local
+
+# Release artifacts
+*.tar.gz
+build/
+dist/

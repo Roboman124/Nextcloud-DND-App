@@ -1,0 +1,15 @@
+{
+  "name": "grimoire-relay",
+  "version": "0.1.0",
+  "description": "Standalone WebSocket fan-out relay for Grimoire live rooms",
+  "license": "AGPL-3.0-or-later",
+  "type": "commonjs",
+  "main": "relay.js",
+  "scripts": {
+    "start": "node relay.js",
+    "dev": "GRIMOIRE_DEV_TRUST=1 node relay.js"
+  },
+  "dependencies": {
+    "ws": "^8.17.0"
+  }
+}

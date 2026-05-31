@@ -1,0 +1,32 @@
+Grimoire — a virtual tabletop for Nextcloud
+Copyright (C) 2026  Grimoire contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+================================================================================
+ACTION REQUIRED BEFORE PUBLISHING
+================================================================================
+This file currently contains only the AGPL-3.0 copyright notice, not the full
+license text. Before pushing to a public repository, replace everything below
+this line with the complete, official GNU Affero General Public License v3.0,
+copied verbatim from:
+
+    https://www.gnu.org/licenses/agpl-3.0.txt
+
+(GitHub will also offer to add it automatically: repo -> Add file ->
+"GNU Affero General Public License v3.0" template.)
+
+The app metadata (appinfo/info.xml) already declares <licence>agpl</licence>,
+so this is the matching license file the AGPL itself requires you to ship.
+================================================================================

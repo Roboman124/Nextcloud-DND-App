@@ -1,0 +1,53 @@
+# Changelog
+
+All notable changes to Grimoire are documented here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
+semantic versioning.
+
+## [0.3.0] - 2026-05-31
+
+### Added
+- **Player roster** with display names and per-player email status.
+- **Individual session reminders** — send a reminder to one player, not just all.
+- **Discord webhooks** per campaign, with configurable events (session
+  reminders wired; dice-roll and player-join events save but fire once the
+  real-time room layer lands). Webhook URL is stored server-side only and never
+  sent to the browser; an SSRF guard restricts it to real Discord URLs.
+- **Plugin developer documentation** (`docs/PLUGINS.md`, `docs/API.md`) and a
+  **community plugin catalog** (`catalog/plugins.json` + submission flow).
+- GitHub scaffolding: CI (build + catalog validation), tagged release packaging,
+  issue/PR templates, `CONTRIBUTING.md`, `LICENSE`, `.gitignore`.
+
+### Fixed
+- **Invite players** now works — replaced the admin-only, mis-pathed
+  provisioning API call with a dedicated `/api/users/search` endpoint usable by
+  any logged-in user.
+- **glTF/GLB models** now surface load errors (with a visible placeholder and
+  toast) instead of silently failing, auto-switch to 3D so the model is visible,
+  and auto-scale to a sensible size.
+- **Measure tool** can toggle between feet and meters.
+- **Area-of-effect templates** can be deleted (right-click one, or "Clear all"),
+  with deletions broadcast to the room.
+- **2D grab** hit-testing fixed (it previously mixed screen and world
+  coordinates so clicks rarely landed on a token).
+
+## [0.2.0] - 2026-05-31
+
+### Fixed
+- App no longer renders blank on Nextcloud 30+ — the bundle crashed on a
+  `process is not defined` reference; Vite now defines `process.env.NODE_ENV`.
+- The compiled stylesheet is now actually loaded (`Util::addStyle`), fixing the
+  unstyled / left-collapsed layout.
+- App root is pinned below the Nextcloud header so it fills the content area on
+  any Nextcloud version.
+- Router no longer depends on `@nextcloud/router` resolving the webroot at
+  module-init time (a separate blank-page cause).
+
+## [0.1.0] - 2026-05-31
+
+### Added
+- Initial foundation: Nextcloud app structure, campaign/scene model, 2D (Konva)
+  and 3D (three.js) modes sharing one tool set via `SceneAdapter`, physics dice
+  (cannon-es), pointer/grab/measure/AoE tools, sandboxed plugin system with the
+  `GRIM` SDK, a sync client with polling fallback, a reference WebSocket relay,
+  and a standalone demo harness.

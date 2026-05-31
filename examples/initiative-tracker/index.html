@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Initiative Tracker</title>
+<style>
+  body{margin:0;font-family:Georgia,serif;background:#120e0a;color:#e9dfc4;padding:12px}
+  h2{color:#c9a227;font-size:13px;letter-spacing:.2em;text-transform:uppercase}
+  li{display:flex;justify-content:space-between;padding:6px;border-bottom:1px solid #2a2218}
+  button{background:#231c13;color:#e9dfc4;border:1px solid #3a3024;border-radius:6px;cursor:pointer;padding:6px 10px}
+</style></head>
+<body>
+  <h2>Initiative</h2>
+  <button id="roll">Roll initiative for all</button>
+  <ol id="list"></ol>
+
+<script type="module">
+/**
+ * Example addon. Demonstrates the Grimoire SDK: read the scene's tokens, roll a
+ * d20 of initiative for each via the host's physics dice, sort, and broadcast
+ * the order so everyone's tracker stays in sync. Ships the SDK alongside it.
+ */
+import { GRIM } from './grimoire-sdk.js';
+
+await GRIM.ready();
+const list = document.getElementById('list');
+let order = [];
+
+function render() {
+  list.innerHTML = order
+    .map(o => `<li><span>${o.label || o.id}</span><strong>${o.init}</strong></li>`)
+    .join('');
+}
+
+document.getElementById('roll').onclick = async () => {
+  const items = await GRIM.scene.getItems();
+  order = [];
+  for (const t of items) {
+    const r = await GRIM.dice.roll('1d20');           // real physics roll on the table
+    order.push({ id: t.id, label: t.label, init: r?.[0]?.value ?? 0 });
+  }
+  order.sort((a, b) => b.init - a.init);
+  render();
+  GRIM.broadcast.send('initiative', order);
+};
+
+GRIM.broadcast.on('initiative', (data) => { order = data; render(); });
+</script>
+</body>
+</html>

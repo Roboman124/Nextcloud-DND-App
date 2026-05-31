@@ -1,0 +1,17 @@
+.git
+.github
+node_modules
+server/node_modules
+src
+build
+*.tar.gz
+.gitignore
+.releaseignore
+vite.config.js
+package-lock.json
+demo.html
+HANDOFF.md
+docs
+catalog
+.DS_Store
+*.log

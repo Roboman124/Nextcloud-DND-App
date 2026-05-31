@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Grimoire — engine demo</title>
+<!--
+  Standalone harness for the Grimoire engine. It imports the SAME modules the
+  Nextcloud app uses (../src/...) and injects three / cannon-es / konva from a
+  CDN via an import map. Run a static server from the project root, e.g.
+
+      npx serve .        # then open /demo.html
+      # or: python3 -m http.server
+
+  Opening with file:// will NOT work — ES modules need http(s).
+-->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js",
+    "konva": "https://cdn.jsdelivr.net/npm/konva@9.3.0/+esm"
+  }
+}
+</script>
+<style>
+  :root{
+    --ink:#0d0b08; --parchment:#e9dfc4; --gold:#c9a227; --ember:#b3402f;
+    --panel:#171310; --line:#3a3024;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:
+    radial-gradient(120% 80% at 50% -10%, #241d14 0%, var(--ink) 60%);
+    color:var(--parchment);
+    font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;}
+  #app{position:fixed;inset:0;display:flex;flex-direction:column}
+  header{display:flex;align-items:center;gap:18px;padding:12px 20px;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#1c1710,#120e0a)}
+  header h1{font-size:20px;margin:0;letter-spacing:.14em;text-transform:uppercase;
+    font-weight:600;color:var(--gold)}
+  header h1 small{display:block;font-size:10px;letter-spacing:.3em;color:#7a6c4e}
+  .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{background:transparent;color:#9a8b68;border:0;padding:8px 16px;
+    font:inherit;font-size:13px;cursor:pointer;letter-spacing:.08em}
+  .seg button.on{background:var(--gold);color:#1a1308;font-weight:700}
+  .spacer{flex:1}
+  main{flex:1;position:relative;overflow:hidden}
+  #stage2d{position:absolute;inset:0}
+  #canvas3d{position:absolute;inset:0;width:100%;height:100%;display:none}
+  /* Toolbar */
+  #tools{position:absolute;left:16px;top:50%;transform:translateY(-50%);
+    display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:14px;
+    background:rgba(18,14,10,.82);border:1px solid var(--line);backdrop-filter:blur(6px)}
+  .tool{width:46px;height:46px;border-radius:10px;border:1px solid transparent;
+    background:#231c13;color:var(--parchment);cursor:pointer;font-size:18px;
+    display:grid;place-items:center}
+  .tool.on{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold) inset;color:var(--gold)}
+  .tool small{font-size:8px;letter-spacing:.05em}
+  /* Dice tray */
+  #dice{position:absolute;right:16px;bottom:16px;width:260px;padding:14px;
+    border-radius:16px;background:rgba(18,14,10,.9);border:1px solid var(--line)}
+  #dice h3{margin:0 0 10px;font-size:12px;letter-spacing:.2em;color:var(--gold);text-transform:uppercase}
+  .dicegrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  .dicegrid button{padding:10px 0;border:1px solid var(--line);background:#231c13;
+    color:var(--parchment);border-radius:8px;cursor:pointer;font:inherit}
+  .dicegrid button:hover{border-color:var(--gold)}
+  #result{margin-top:12px;font-size:28px;text-align:center;color:var(--gold);min-height:34px}
+  #result span{font-size:12px;color:#9a8b68}
+  .hint{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);
+    font-size:11px;color:#6b5e44;letter-spacing:.08em}
+  #addonbtn{padding:8px 14px;border:1px solid var(--line);background:#231c13;color:var(--parchment);
+    border-radius:8px;cursor:pointer;font:inherit;font-size:12px}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Grimoire <small>virtual tabletop</small></h1>
+    <div class="seg" id="mode">
+      <button data-mode="2d" class="on">2D Map</button>
+      <button data-mode="3d">3D Table</button>
+    </div>
+    <div class="spacer"></div>
+    <button id="addonbtn">Add a token</button>
+  </header>
+  <main>
+    <div id="stage2d"></div>
+    <canvas id="canvas3d"></canvas>
+
+    <div id="tools"><!-- filled by JS --></div>
+
+    <div id="dice">
+      <h3>Dice — physics</h3>
+      <div class="dicegrid">
+        <button data-d="d4">d4</button><button data-d="d6">d6</button><button data-d="d8">d8</button>
+        <button data-d="d10">d10</button><button data-d="d12">d12</button><button data-d="d20">d20</button>
+      </div>
+      <div id="result">—</div>
+    </div>
+    <div class="hint">Pointer · Grab tokens · Measure distance · Drop an Area of Effect · roll real dice</div>
+  </main>
+</div>
+
+<!-- Visible error surface: ES module failures are otherwise silent. -->
+<div id="err" style="display:none;position:fixed;left:16px;right:16px;bottom:16px;
+  z-index:9999;background:#2a0f0c;border:1px solid #b3402f;border-radius:10px;
+  padding:14px 16px;color:#f3d9a0;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;
+  white-space:pre-wrap;max-height:40vh;overflow:auto"></div>
+<script>
+  // Catch load/runtime errors from the module below and show them.
+  (function () {
+    const box = document.getElementById('err');
+    function show(msg) {
+      box.style.display = 'block';
+      box.textContent = 'Demo error — see details below:\n\n' + msg +
+        '\n\nMost common cause: opening this file directly (file://). ' +
+        'ES modules need an http server — run "npx serve ." (or ' +
+        '"python3 -m http.server") from the project root and open /demo.html. ' +
+        'A blocked CDN (three / cannon-es / konva from jsdelivr) will also show here.';
+    }
+    window.addEventListener('error', (e) => {
+      if (e.message) show(e.message + (e.filename ? '\n  at ' + e.filename + ':' + e.lineno : ''));
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      show('' + (e.reason && e.reason.stack ? e.reason.stack : e.reason));
+    });
+  })();
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import Konva from 'konva';
+
+import { Scene2D } from '../src/engine/2d/Scene2D.js';
+import { Scene3D } from '../src/engine/3d/Scene3D.js';
+import { DiceRoller } from '../src/engine/3d/DiceRoller.js';
+import { ToolManager } from '../src/tools/ToolManager.js';
+import { Scene2DAdapter, Scene3DAdapter } from '../src/engine/SceneAdapter.js';
+
+const stage2dEl = document.getElementById('stage2d');
+const canvas3d = document.getElementById('canvas3d');
+const main = document.querySelector('main');
+
+/* ---------- 2D scene ---------- */
+const scene2d = new Scene2D({
+  Konva, container: stage2dEl, gridSize: 70,
+  onChange: (c) => {/* would broadcast via SyncClient */},
+});
+scene2d.upsertToken({ id:'pc1', color:'#3b7a57', x:140, y:140, size:1, label:'Hero' });
+scene2d.upsertToken({ id:'gob1', color:'#b3402f', x:420, y:280, size:1, label:'Goblin' });
+
+/* ---------- 3D scene + dice (shared physics world) ---------- */
+const scene3d = new Scene3D({ THREE, CANNON, GLTFLoader, OrbitControls, canvas: canvas3d });
+scene3d.upsertToken({ id:'pc1', kind:'primitive', color:'#3b7a57', x:-3, z:-3, label:'Hero' });
+scene3d.upsertToken({ id:'gob1', kind:'primitive', color:'#b3402f', x:4, z:2, label:'Goblin' });
+
+const dice = new DiceRoller({
+  THREE, CANNON, scene: scene3d.scene, world: scene3d.world,
+  onSettle: (results) => {
+    const total = results.reduce((s,r)=>s+r.value,0);
+    const parts = results.map(r=>`${r.type}:${r.value}`).join('  ');
+    document.getElementById('result').innerHTML =
+      `${total}<br><span>${parts}</span>`;
+  },
+});
+
+/* ---------- tools ---------- */
+const adapter2d = new Scene2DAdapter(scene2d, { THREE });
+const adapter3d = new Scene3DAdapter(scene3d, { THREE });
+let mode = '2d';
+let tools = new ToolManager(adapter2d);
+
+function buildToolbar(){
+  const el = document.getElementById('tools');
+  el.innerHTML = '';
+  const icons = { pointer:'➤', grab:'✋', measure:'📏', aoe:'✸' };
+  for (const t of tools.list()){
+    const b = document.createElement('button');
+    b.className = 'tool' + (tools.active?.id===t.id?' on':'');
+    b.innerHTML = `${icons[t.id]||'•'}<small>${t.name.split(' ')[0]}</small>`;
+    b.onclick = () => { tools.activate(t.id); buildToolbar(); };
+    el.appendChild(b);
+  }
+}
+buildToolbar();
+
+/* route pointer events to the active tool, in the active scene's coords */
+function ndcFromEvent(e){
+  const r = canvas3d.getBoundingClientRect();
+  return { x:((e.clientX-r.left)/r.width)*2-1, y:-((e.clientY-r.top)/r.height)*2+1 };
+}
+function bindPointer(target, getWorld){
+  target.addEventListener('pointerdown', e => tools.handle('onPointerDown', getWorld(e)));
+  target.addEventListener('pointermove', e => tools.handle('onPointerMove', getWorld(e)));
+  window.addEventListener('pointerup',  e => tools.handle('onPointerUp',  getWorld(e)));
+}
+bindPointer(stage2dEl, () => adapter2d.worldPointFromEvent());
+bindPointer(canvas3d, (e) => adapter3d.worldPointFromEvent(ndcFromEvent(e)));
+
+/* ---------- mode toggle ---------- */
+document.getElementById('mode').addEventListener('click', (e) => {
+  const btn = e.target.closest('button'); if(!btn) return;
+  mode = btn.dataset.mode;
+  document.querySelectorAll('#mode button').forEach(b=>b.classList.toggle('on', b===btn));
+  const is3d = mode==='3d';
+  canvas3d.style.display = is3d ? 'block' : 'none';
+  stage2dEl.style.display = is3d ? 'none' : 'block';
+  tools = new ToolManager(is3d ? adapter3d : adapter2d);
+  buildToolbar();
+  resize();
+});
+
+/* ---------- dice buttons ---------- */
+document.querySelectorAll('.dicegrid button').forEach(b=>{
+  b.onclick = () => {
+    if(mode!=='3d'){ // hop into 3D so you can watch them tumble
+      document.querySelector('#mode button[data-mode="3d"]').click();
+    }
+    document.getElementById('result').textContent='rolling…';
+    dice.roll([{ type:b.dataset.d, count: b.dataset.d==='d6'?2:1, color:'#d8c9a0' }]);
+  };
+});
+
+/* ---------- add-token button (stands in for the addon/asset flow) ---------- */
+let n=0;
+document.getElementById('addonbtn').onclick = () => {
+  const id='t'+(++n);
+  const color='#'+Math.floor(Math.random()*0xffffff).toString(16).padStart(6,'0');
+  scene2d.upsertToken({ id, color, x:200+n*40, y:200, size:1, label:'NPC '+n });
+  scene3d.upsertToken({ id, kind:'primitive', color, x:n, z:0, label:'NPC '+n });
+};
+
+/* ---------- render loop ---------- */
+function resize(){
+  const w=main.clientWidth, h=main.clientHeight;
+  scene2d.resize(w,h); scene3d.resize(w,h);
+}
+window.addEventListener('resize', resize); resize();
+
+function loop(){
+  const dt = scene3d.render();   // steps the shared physics world once
+  dice.step(dt);                 // syncs dice meshes + reads results
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
