@@ -93,6 +93,7 @@ export class DiceRoller {
       }
     }
     this._settled = false;
+    this._rollStart = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     return this;
   }
 
@@ -167,13 +168,34 @@ export class DiceRoller {
    */
   step(dt = 1 / 60) {
     if (this.ownsWorld) this.world.step(1 / 60, dt, 3);
-    let allAsleep = this.dice.length > 0;
+    if (this._settled || this.dice.length === 0) {
+      for (const d of this.dice) {
+        d.mesh.position.copy(d.body.position);
+        d.mesh.quaternion.copy(d.body.quaternion);
+      }
+      return;
+    }
+
+    let allAsleep = true;
+    let allSlow = true;       // velocity-based fallback for dice that won't sleep
     for (const d of this.dice) {
       d.mesh.position.copy(d.body.position);
       d.mesh.quaternion.copy(d.body.quaternion);
       if (d.body.sleepState !== this.CANNON.Body.SLEEPING) allAsleep = false;
+      const v = d.body.velocity, av = d.body.angularVelocity;
+      const speed = Math.hypot(v.x, v.y, v.z) + Math.hypot(av.x, av.y, av.z);
+      if (speed > 0.18) allSlow = false;
     }
-    if (allAsleep && !this._settled) {
+
+    const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - (this._rollStart || 0);
+    // Resolve when: all dice sleep, OR all are nearly stationary after a brief
+    // grace period, OR a hard timeout passes (many dice can jostle forever and
+    // never all reach the SLEEPING state — previously the result never fired).
+    const settled = allAsleep
+      || (allSlow && elapsed > 1500)
+      || (elapsed > 6000);
+
+    if (settled) {
       this._settled = true;
       const results = this.dice.map((d) => ({
         type: d.type,

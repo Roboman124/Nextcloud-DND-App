@@ -91,13 +91,18 @@ export class SyncClient {
           { headers: { 'OCS-APIRequest': 'true', requesttoken: window.OC?.requestToken || '' } }
         );
         const data = await res.json();
-        for (const m of data.messages || []) {
-          // Don't echo our own messages back to us.
-          if (m.from === this.userId) continue;
-          if (m.type === 'presence') this.onPresence(m.payload);
-          else this.onMessage(m);
+        if (data.reset) {
+          // Server buffer was cleared/expired; resync cursor, don't replay.
+          cursor = data.cursor || 0;
+        } else {
+          for (const m of data.messages || []) {
+            // Don't echo our own messages back to us.
+            if (m.from === this.userId) continue;
+            if (m.type === 'presence') this.onPresence(m.payload);
+            else this.onMessage(m);
+          }
+          cursor = data.cursor || cursor;
         }
-        cursor = data.cursor || cursor;
       } catch { /* keep trying */ }
       setTimeout(tick, 1000);
     };

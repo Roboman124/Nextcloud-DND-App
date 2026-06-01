@@ -64,16 +64,35 @@ class AddonProxyController extends Controller {
         if (!$this->isAllowed($url)) {
             return new DataDisplayResponse('Blocked: addon host not allowed', Http::STATUS_FORBIDDEN, ['Content-Type' => 'text/plain']);
         }
+        try {
+            return $this->doProxy($url);
+        } catch (\Throwable $e) {
+            $this->logger->error('Grimoire: addon proxy failed', ['url' => $url, 'exception' => $e]);
+            // Return the reason as readable text inside the frame instead of
+            // Nextcloud's generic Internal Server Error HTML page.
+            return new DataDisplayResponse(
+                'Grimoire addon proxy error: ' . $e->getMessage(),
+                Http::STATUS_INTERNAL_SERVER_ERROR,
+                ['Content-Type' => 'text/plain']
+            );
+        }
+    }
+
+    private function doProxy(string $url): DataDisplayResponse {
 
         try {
             $client = $this->clientService->newClient();
             $response = $client->get($url, ['timeout' => 12]);
             $body = (string) $response->getBody();
-            $contentType = $this->contentTypeFor($url, $response->getHeader('Content-Type'));
         } catch (\Throwable $e) {
             $this->logger->warning('Grimoire: addon proxy fetch failed', ['url' => $url, 'exception' => $e]);
             return new DataDisplayResponse('Could not fetch addon file', Http::STATUS_BAD_GATEWAY, ['Content-Type' => 'text/plain']);
         }
+
+        // Infer content type from the file extension. We deliberately do NOT read
+        // the remote Content-Type header: GitHub raw serves everything as
+        // text/plain, and the header accessor differs across client versions.
+        $contentType = $this->contentTypeFor($url, '');
 
         // If this is the addon's HTML entry, rewrite its relative asset/SDK URLs
         // to go back through this proxy too, so the whole addon stays same-origin.
@@ -84,17 +103,24 @@ class AddonProxyController extends Controller {
         $res = new DataDisplayResponse($body, Http::STATUS_OK, ['Content-Type' => $contentType]);
 
         // Relaxed CSP scoped to THIS response only — lets the addon's inline
-        // scripts/styles run. The host app's pages keep Nextcloud's strict CSP.
-        $csp = new ContentSecurityPolicy();
-        $csp->allowInlineScript(true);
-        $csp->allowEvalScript(true);
-        $csp->allowInlineStyle(true);
-        $csp->addAllowedScriptDomain('*');
-        $csp->addAllowedStyleDomain('*');
-        $csp->addAllowedConnectDomain('*');
-        $csp->addAllowedImageDomain('*');
-        $csp->addAllowedFontDomain('*');
-        $res->setContentSecurityPolicy($csp);
+        // scripts/styles run. Guarded so an unavailable CSP method can never
+        // 500 the whole response.
+        try {
+            $csp = new ContentSecurityPolicy();
+            // Guard each call: Nextcloud occasionally deprecates/removes CSP
+            // methods between majors, and any missing one would 500 the response.
+            if (method_exists($csp, 'allowInlineScript')) $csp->allowInlineScript(true);
+            if (method_exists($csp, 'allowInlineStyle')) $csp->allowInlineStyle(true);
+            if (method_exists($csp, 'allowEvalScript')) $csp->allowEvalScript(true);
+            if (method_exists($csp, 'addAllowedScriptDomain')) $csp->addAllowedScriptDomain('*');
+            if (method_exists($csp, 'addAllowedStyleDomain')) $csp->addAllowedStyleDomain('*');
+            if (method_exists($csp, 'addAllowedConnectDomain')) $csp->addAllowedConnectDomain('*');
+            if (method_exists($csp, 'addAllowedImageDomain')) $csp->addAllowedImageDomain('*');
+            if (method_exists($csp, 'addAllowedFontDomain')) $csp->addAllowedFontDomain('*');
+            $res->setContentSecurityPolicy($csp);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Grimoire: addon proxy CSP build failed', ['exception' => $e]);
+        }
 
         return $res;
     }
@@ -131,28 +157,36 @@ class AddonProxyController extends Controller {
 
     /** Rewrite relative URLs in the addon HTML to route through this proxy. */
     private function rewriteHtml(string $html, string $baseUrl): string {
-        $base = preg_replace('#[^/]*$#', '', $baseUrl); // strip filename
-        // Build the proxy URL prefix relative to this app route.
+        $base = preg_replace('~[^/]*$~', '', $baseUrl); // strip filename
         $self = '/index.php/apps/grimoire/addon-proxy?url=';
 
-        // Rewrite src="..."/href="..." that are relative (not absolute/scheme).
-        $html = preg_replace_callback(
-            '#\b(src|href)\s*=\s*"(?!https?://|//|data:|blob:|#)([^"]+)"#i',
+        // Use ~ as the delimiter so a literal '#' (anchor links) inside the
+        // pattern is not mistaken for the delimiter. Rewrite relative src/href.
+        $out = preg_replace_callback(
+            '~\\b(src|href)\\s*=\\s*"(?!https?://|//|data:|blob:|#)([^"]+)"~i',
             function ($m) use ($base, $self) {
                 $abs = $base . ltrim($m[2], './');
                 return $m[1] . '="' . $self . rawurlencode($abs) . '"';
             },
             $html
         );
+        if ($out !== null) {
+            $html = $out;
+        }
+
         // Rewrite a relative SDK import in module scripts.
-        $html = preg_replace_callback(
-            '#from\s*([\'"])(?!https?://)(\./)?grimoire-sdk\.js\1#i',
+        $out = preg_replace_callback(
+            '~from\\s*([\'"])(?!https?://)(\\./)?grimoire-sdk\\.js\\1~i',
             function ($m) use ($base, $self) {
                 $abs = $base . 'grimoire-sdk.js';
                 return 'from "' . $self . rawurlencode($abs) . '"';
             },
             $html
         );
+        if ($out !== null) {
+            $html = $out;
+        }
+
         return $html;
     }
 }

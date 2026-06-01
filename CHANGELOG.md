@@ -4,6 +4,42 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.5.3] - 2026-06-01
+
+### Fixed
+- **Grab now works on 3D models.** The 3D token picker expected normalized
+  device coords but the grab tool passes a world point, so raycasting missed
+  every model (and primitive). Rewritten to select the nearest token to the
+  clicked ground point, which also handles multi-mesh glTF model groups.
+- **Large dice rolls now resolve.** The result only computed once every die
+  reached the physics SLEEPING state; with many dice they jostle each other and
+  never all sleep, so the total never appeared. Added a velocity-based settle
+  fallback and a hard timeout so a roll always produces a result.
+## [0.5.2] - 2026-06-01
+
+### Fixed
+- **Addon proxy regex crash.** The URL-rewriter used '#' as the regex delimiter
+  while the pattern also contained '#', producing "Unknown modifier ')'" and a
+  null that crashed the second replace — every addon load 500-ed. Switched to a
+  '~' delimiter and guarded both replaces against null.
+- **Multiplayer dropped moves.** push() did a non-atomic read-modify-write on a
+  shared cache buffer, so simultaneous updates (e.g. two players dragging
+  tokens) clobbered each other. Rewritten to an atomic per-message scheme using
+  the cache's atomic counter, so concurrent pushes can't lose messages.
+- **Sync recovery after a session ends.** poll() now detects a cleared/expired
+  cache buffer and tells the client to resync its cursor instead of stalling.
+- **Invites silently failing.** Saving a campaign (used by invite/remove player)
+  had no error handling, so a failed save looked like a player was added when it
+  wasn't. Failures now surface, and local state syncs to what the server stored.
+## [0.5.1] - 2026-06-01
+
+### Fixed
+- **Addon proxy no longer 500s.** Hardened AddonProxyController: it no longer
+  reads the remote Content-Type header (inferring type from the file extension
+  instead), every CSP method call is guarded against removal across Nextcloud
+  versions, and any unexpected error now returns a readable message inside the
+  addon frame instead of Nextcloud's generic Internal Server Error page.
+
 ## [0.5.0] - 2026-06-01
 
 ### Added

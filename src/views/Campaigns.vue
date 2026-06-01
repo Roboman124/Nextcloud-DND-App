@@ -373,11 +373,23 @@ export default {
 
     async _saveCampaignData(campaign) {
       const c = this.campaigns.find((x) => x.id === campaign.id);
-      await axios.put(this.api(`/campaigns/${campaign.id}`), {
-        title: c.title,
-        description: c.description || '',
-        data: JSON.stringify(this.campaignData[campaign.id]),
-      });
+      try {
+        const { data } = await axios.put(this.api(`/campaigns/${campaign.id}`), {
+          title: c.title,
+          description: c.description || '',
+          data: JSON.stringify(this.campaignData[campaign.id]),
+        });
+        // Keep local state in step with what the server actually stored.
+        if (data && typeof data.data === 'string') {
+          try { this.campaignData[campaign.id] = JSON.parse(data.data); } catch { /* keep local */ }
+          if (!this.campaignData[campaign.id].players) this.campaignData[campaign.id].players = [];
+        }
+        return true;
+      } catch (e) {
+        const msg = e?.response?.data?.error || `HTTP ${e?.response?.status || '?'}`;
+        this.flash(campaign.id, `Save failed: ${msg}`, false);
+        return false;
+      }
     },
   },
 };

@@ -225,14 +225,21 @@ export class Scene3DAdapter {
     return null;
   }
 
-  pickToken(ndc) {
-    this.raycaster.setFromCamera(ndc, this.scene.camera);
-    const meshes = [...this.scene.tokens.values()].map((e) => e.mesh);
-    const hit = this.raycaster.intersectObjects(meshes, true)[0];
-    if (!hit) return null;
-    let o = hit.object;
-    while (o && !o.userData.tokenId) o = o.parent;
-    return o ? { id: o.userData.tokenId } : null;
+  pickToken(w) {
+    // GrabTool passes a world point on the ground (not ndc). Find the nearest
+    // token within a grab radius. This works uniformly for primitives and glTF
+    // model groups (which a mesh-raycast handled inconsistently).
+    if (!w || w.x === undefined) return null;
+    const wx = w.x, wz = (w.z !== undefined ? w.z : w.y);
+    let best = null, bestDist = Infinity;
+    for (const [id, e] of this.scene.tokens) {
+      const p = e.mesh.position;
+      const d = Math.hypot(p.x - wx, p.z - wz);
+      // Grab radius scales with the token's footprint (~1 unit default).
+      const radius = Math.max(1.2, (e.data.size || 1) * 1.2);
+      if (d <= radius && d < bestDist) { bestDist = d; best = id; }
+    }
+    return best ? { id: best } : null;
   }
   moveToken(id, w) {
     const e = this.scene.tokens.get(id);

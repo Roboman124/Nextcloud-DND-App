@@ -96,29 +96,34 @@ class RoomController extends OCSController {
         }
 
         $cache = $this->cacheFactory->createDistributed(Application::APP_ID . '-room-');
-        $key = 'scene-' . $sceneId;
+        // Atomic sequence number: inc() is atomic in the distributed cache, so
+        // concurrent pushes each get a unique seq with no read-modify-write race
+        // (the previous shared-array approach silently dropped simultaneous
+        // moves, e.g. during fast token dragging by multiple players).
+        $seqKey = 'scene-' . $sceneId . '-seq';
+        $seq = $cache->inc($seqKey);
+        if (!$seq) {
+            // First write or cache reset: establish the counter.
+            $cache->set($seqKey, 1, self::TTL);
+            $seq = 1;
+        }
+        // Keep the TTL fresh while the room is active.
+        $cache->set($seqKey, $seq, self::TTL);
 
-        $buffer = $cache->get($key) ?? ['seq' => 0, 'messages' => []];
-        $buffer['seq']++;
         $message = [
-            'seq' => $buffer['seq'],
+            'seq' => $seq,
             'type' => $type,
             'payload' => $payload,
             'from' => $this->userId,
             't' => round(microtime(true) * 1000),
         ];
-        $buffer['messages'][] = $message;
+        // Store each message under its own key so writers never overwrite each
+        // other. Keys expire on their own TTL; poll reads the live range.
+        $cache->set('scene-' . $sceneId . '-msg-' . $seq, $message, self::TTL);
 
-        // Trim the ring buffer so the cache entry stays small.
-        if (count($buffer['messages']) > self::MAX_MESSAGES) {
-            $buffer['messages'] = array_slice($buffer['messages'], -self::MAX_MESSAGES);
-        }
-        $cache->set($key, $buffer, self::TTL);
-
-        // Forward eligible events to Discord (dormant until messages flow here).
         $this->maybeNotifyDiscord($scene->getCampaignId(), $type, $payload);
 
-        return new JSONResponse(['seq' => $buffer['seq']]);
+        return new JSONResponse(['seq' => $seq]);
     }
 
     /**
@@ -136,17 +141,26 @@ class RoomController extends OCSController {
         }
 
         $cache = $this->cacheFactory->createDistributed(Application::APP_ID . '-room-');
-        $buffer = $cache->get('scene-' . $sceneId) ?? ['seq' => 0, 'messages' => []];
+        $current = (int) ($cache->get('scene-' . $sceneId . '-seq') ?? 0);
 
-        $fresh = array_values(array_filter(
-            $buffer['messages'],
-            static fn($m) => ($m['seq'] ?? 0) > $since
-        ));
+        // Cache reset/expiry: if the latest seq is below the client's cursor, the
+        // buffer was cleared — tell the client to jump to current (no replay).
+        if ($current < $since) {
+            return new JSONResponse(['messages' => [], 'cursor' => $current, 'reset' => true]);
+        }
 
-        return new JSONResponse([
-            'messages' => $fresh,
-            'cursor' => $buffer['seq'] ?? $since,
-        ]);
+        $messages = [];
+        // Only look back a bounded window so a long-lived room doesn't scan
+        // thousands of keys; older messages have expired anyway.
+        $from = max($since + 1, $current - self::MAX_MESSAGES + 1);
+        for ($i = $from; $i <= $current; $i++) {
+            $m = $cache->get('scene-' . $sceneId . '-msg-' . $i);
+            if ($m) {
+                $messages[] = $m;
+            }
+        }
+
+        return new JSONResponse(['messages' => $messages, 'cursor' => $current]);
     }
 
     /** Forward dice/join events to the campaign's Discord webhook if enabled. */
