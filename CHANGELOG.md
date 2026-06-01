@@ -4,6 +4,20 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.4.2] - 2026-06-01
+
+### Fixed
+- **Reminder emails now set a From address** (system mail_from, or a no-reply
+  derived from the instance URL). A missing sender is the most common reason
+  Nextcloud silently fails to send, even when the admin's test email works.
+- **Email failures now report the real reason** in the reminder result and the
+  Nextcloud log, instead of a generic "(send error)".
+
+### Added
+- The room-token response reports whether a distributed cache backs multiplayer;
+  if not, the room shows a one-time notice and runs local-only, so a missing
+  memory cache no longer fails silently.
+
 ## [0.4.1] - 2026-06-01
 
 ### Fixed

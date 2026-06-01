@@ -72,10 +72,15 @@ class RoomController extends OCSController {
 
         $relayUrl = getenv('GRIMOIRE_RELAY_URL') ?: '';
 
+        // Probe the distributed cache: poll-mode multiplayer relies on it, and a
+        // local-only (non-distributed) cache silently drops cross-request data.
+        $cacheOk = $this->cacheFactory->isAvailable();
+
         return new JSONResponse([
             'token' => $token,
             'roomId' => $roomId,
             'relayUrl' => $relayUrl, // empty -> SyncClient uses long-poll
+            'syncBackend' => $cacheOk ? 'cache' : 'none',
         ]);
     }
 

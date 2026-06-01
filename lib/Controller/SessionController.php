@@ -11,9 +11,12 @@ use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\OCSController;
+use OCP\Defaults;
+use OCP\IConfig;
 use OCP\IRequest;
 use OCP\IUserManager;
 use OCP\Mail\IMailer;
+use Psr\Log\LoggerInterface;
 
 /**
  * Session scheduling, player roster, email reminders, and Discord notifications.
@@ -35,6 +38,9 @@ class SessionController extends OCSController {
         private IUserManager $userManager,
         private IMailer $mailer,
         private DiscordService $discord,
+        private IConfig $config,
+        private Defaults $defaults,
+        private LoggerInterface $logger,
         private ?string $userId,
     ) {
         parent::__construct(Application::APP_ID, $request);
@@ -111,6 +117,10 @@ class SessionController extends OCSController {
             }
 
             $mail = $this->mailer->createMessage();
+            // A From address is required — without it many SMTP servers reject
+            // the message. Use the admin-configured mail_from, falling back to
+            // no-reply@<domain> derived from the instance URL.
+            $mail->setFrom([$this->systemFromAddress() => $this->defaults->getName()]);
             $mail->setTo([$email => $user->getDisplayName()]);
             $mail->setSubject("Session reminder: {$campaign->getTitle()}");
             $mail->setPlainTextBody($this->buildEmailBody($campaign->getTitle(), $when, $message, $user->getDisplayName()));
@@ -119,8 +129,10 @@ class SessionController extends OCSController {
             try {
                 $this->mailer->send($mail);
                 $sent[] = $playerUid;
-            } catch (\Exception) {
-                $skipped[] = $playerUid . ' (send error)';
+            } catch (\Throwable $e) {
+                // Surface the real reason instead of a generic "(send error)".
+                $this->logger->error('Grimoire: reminder email failed', ['exception' => $e]);
+                $skipped[] = $playerUid . ' (' . $e->getMessage() . ')';
             }
         }
 
@@ -143,6 +155,23 @@ class SessionController extends OCSController {
             'skipped' => $skipped,
             'discordPosted' => $discordPosted,
         ]);
+    }
+
+    /**
+     * The system "from" email. Nextcloud stores the local part in mail_from_address
+     * and the domain in mail_domain; if unset, derive a no-reply address from the
+     * instance's overwrite.cli.url so the message always has a valid sender.
+     */
+    private function systemFromAddress(): string {
+        $local = $this->config->getSystemValue('mail_from_address', '');
+        $domain = $this->config->getSystemValue('mail_domain', '');
+        if ($local && $domain) {
+            return $local . '@' . $domain;
+        }
+        // Fallback: no-reply@<host-from-instance-url>
+        $url = $this->config->getSystemValue('overwrite.cli.url', 'http://localhost');
+        $host = parse_url($url, PHP_URL_HOST) ?: 'localhost';
+        return 'no-reply@' . $host;
     }
 
     private function ownedOr404(int $id): \OCA\Grimoire\Db\Campaign|JSONResponse {

@@ -240,6 +240,9 @@ export default {
         });
         this.sync.connect();
         this.syncReady = true;
+        if (data.syncBackend === 'none' && !data.relayUrl) {
+          this._notify('Multiplayer needs a memory cache (Redis/APCu) configured in Nextcloud — running local-only for now.');
+        }
       } catch (e) {
         // Token endpoint missing or access denied — local-only mode.
         // eslint-disable-next-line no-console
