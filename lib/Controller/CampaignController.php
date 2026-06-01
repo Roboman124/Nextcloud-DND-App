@@ -31,8 +31,20 @@ class CampaignController extends OCSController {
 
     #[NoAdminRequired]
     public function index(): JSONResponse {
-        $campaigns = $this->mapper->findAllForUser($this->userId);
-        return new JSONResponse(array_map([$this, 'sanitize'], $campaigns));
+        $owned = $this->mapper->findAllForUser($this->userId);
+        $shared = $this->mapper->findSharedWithUser($this->userId);
+        $out = [];
+        foreach ($owned as $c) {
+            $arr = $this->sanitize($c);
+            $arr['role'] = 'owner';
+            $out[] = $arr;
+        }
+        foreach ($shared as $c) {
+            $arr = $this->sanitize($c);
+            $arr['role'] = 'player';
+            $out[] = $arr;
+        }
+        return new JSONResponse($out);
     }
 
     #[NoAdminRequired]

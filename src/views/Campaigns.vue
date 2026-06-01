@@ -26,10 +26,11 @@
             <p>{{ c.description || 'No description' }}</p>
           </div>
           <div class="card-actions">
-            <button class="ghost small" @click="toggleManage(c.id)">
+            <button v-if="c.role !== 'player'" class="ghost small" @click="toggleManage(c.id)">
               {{ managing === c.id ? '▲ Close' : '⚙ Manage' }}
             </button>
-            <button class="ghost small danger" title="Delete campaign" @click="deleteCampaign(c)">🗑</button>
+            <button v-if="c.role !== 'player'" class="ghost small danger" title="Delete campaign" @click="deleteCampaign(c)">🗑</button>
+            <span v-else class="role-badge">shared with you</span>
           </div>
         </div>
 
@@ -41,7 +42,7 @@
             @click="open(c, s)">
             {{ s.name }} <em>{{ s.mode }}</em>
           </button>
-          <button class="ghost" @click="addScene(c)">+ scene</button>
+          <button v-if="c.role !== 'player'" class="ghost" @click="addScene(c)">+ scene</button>
         </div>
 
         <!-- Session management panel -->
@@ -324,7 +325,11 @@ export default {
         if (data.discordPosted) msg += ' Posted to Discord.';
         this.reminderStatus[campaign.id] = { ok: true, msg };
       } catch (e) {
-        const msg = e?.response?.data?.error || 'Failed to send reminder.';
+        const status = e?.response?.status;
+        const detail = e?.response?.data?.error;
+        let msg = detail || 'Failed to send reminder.';
+        if (status === 500) msg = `Server error (500) sending reminder — check Nextcloud logs (occ log:tail).`;
+        else if (status) msg = `${msg} (HTTP ${status})`;
         this.reminderStatus[campaign.id] = { ok: false, msg };
       } finally {
         this.sending[key] = false;
@@ -404,7 +409,8 @@ ul { list-style: none; padding: 0; }
 .card-header { display: flex; justify-content: space-between; align-items: flex-start; }
 .meta strong { color: var(--g-text, #d8dde4); font-size: 16px; }
 .meta p { color: var(--g-text-dim, #8b949e); margin: 4px 0 0; font-size: 13px; }
-.card-actions { flex-shrink: 0; }
+.card-actions { flex-shrink: 0; display: flex; gap: 6px; align-items: center; }
+.role-badge { font-size: 11px; color: var(--g-text-dim, #8b949e); font-style: italic; padding: 2px 8px; border: 1px solid var(--g-border, #2d3748); border-radius: 12px; }
 
 .scenes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
 .scenes button { background: var(--g-bg-card, #1e2430); color: var(--g-text, #d8dde4);

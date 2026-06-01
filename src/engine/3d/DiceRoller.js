@@ -96,6 +96,29 @@ export class DiceRoller {
     return this;
   }
 
+  /**
+   * Roll and resolve once the dice settle, returning the results array.
+   * Used by the addon SDK's GRIM.dice.roll() so plugins can await a value.
+   */
+  rollAsync(spec, opts = {}) {
+    return new Promise((resolve) => {
+      const prev = this.onSettle;
+      this.onSettle = (results) => {
+        this.onSettle = prev;            // restore the standing handler
+        try { prev?.(results); } catch { /* ignore */ }
+        resolve(results);
+      };
+      this.roll(spec, opts);
+      // Safety timeout so a stuck die never hangs the plugin's await.
+      setTimeout(() => {
+        if (this.onSettle !== prev) {
+          this.onSettle = prev;
+          resolve(this.dice.map((d) => ({ type: d.type, value: d.faceValue(d.body.quaternion, this.THREE) })));
+        }
+      }, 8000);
+    });
+  }
+
   _spawnDie(type, color, rng) {
     const { THREE, CANNON } = this;
     const { geometry, shape, faceValue, scale, faceMap, faceRadius, labelSize } = buildDie(type, THREE, CANNON);

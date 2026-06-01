@@ -286,7 +286,14 @@ export default {
       this.addonManager = new AddonManager({
         host: this,
         capabilities: {
-          sceneRead: () => [...this.scene2d.tokens.values()].map((e) => e.data),
+          sceneRead: () => {
+            // Union of tokens across both scenes so addons see everything on
+            // the table regardless of which mode placed them.
+            const byId = new Map();
+            for (const e of this.scene2d.tokens.values()) byId.set(e.data.id, e.data);
+            for (const e of this.scene3d.tokens.values()) if (!byId.has(e.data.id)) byId.set(e.data.id, e.data);
+            return [...byId.values()];
+          },
           sceneWrite: (op, p) => {
             if (op === 'add' || op === 'update') {
               this.scene2d.upsertToken(p);
@@ -305,7 +312,14 @@ export default {
           broadcast: (p) => this.sync?.send({ type: 'broadcast:' + p.channel, payload: p.payload }),
           metadataGet: () => ({}),
           metadataSet: () => true,
-          diceRoll: (p) => { this.setMode('3d'); this.diceRoller.roll(p.notation); },
+          diceRoll: async (p) => {
+            this.setMode('3d');
+            const rolls = await this.diceRoller.rollAsync(p.notation);
+            const total = (rolls || []).reduce((s, d) => s + (d.value || 0), 0);
+            // Broadcast so other players see the addon's roll too.
+            this.sync?.send({ type: 'dice:result', payload: { rolls, total, notation: p.notation } });
+            return { rolls, total };
+          },
           notify: (p) => console.info('[addon]', p.text),
         },
       });

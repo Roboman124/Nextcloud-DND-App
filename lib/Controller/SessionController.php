@@ -123,7 +123,7 @@ class SessionController extends OCSController {
             $mail->setFrom([$this->systemFromAddress() => $this->defaults->getName()]);
             $mail->setTo([$email => $user->getDisplayName()]);
             $mail->setSubject("Session reminder: {$campaign->getTitle()}");
-            $mail->setPlainTextBody($this->buildEmailBody($campaign->getTitle(), $when, $message, $user->getDisplayName()));
+            $mail->setPlainBody($this->buildEmailBody($campaign->getTitle(), $when, $message, $user->getDisplayName()));
             $mail->setHtmlBody($this->buildHtmlBody($campaign->getTitle(), $when, $message, $user->getDisplayName()));
 
             try {

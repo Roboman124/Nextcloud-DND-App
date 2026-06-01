@@ -4,6 +4,26 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.4.4] - 2026-06-01
+
+### Fixed
+- **Reminder emails now actually send.** The code called a non-existent mail
+  method (`setPlainTextBody`), which 500-ed every reminder. Corrected to
+  Nextcloud's `setPlainBody`. (The From-address fix from 0.4.2 remains.)
+
+## [0.4.3] - 2026-06-01
+
+### Fixed
+- **Shared campaigns now appear for invited players.** The campaign list only
+  queried by owner; it now also returns campaigns where you're a listed player
+  (marked "shared with you"), and players can list and open those scenes.
+  Create/delete/manage remain owner-only.
+- **Addon dice rolls now return a value.** `GRIM.dice.roll()` resolved before the
+  physics dice settled, so the example tracker scored everyone 0 and appeared to
+  do nothing. Added `rollAsync` so the SDK awaits the settled result; addons also
+  now see tokens from both 2D and 3D scenes.
+- Reminder failures in the UI now show the HTTP status to aid diagnosis.
+
 ## [0.4.2] - 2026-06-01
 
 ### Fixed

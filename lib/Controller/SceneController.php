@@ -31,7 +31,7 @@ class SceneController extends OCSController {
 
     #[NoAdminRequired]
     public function index(int $campaignId): JSONResponse {
-        if (!$this->ownsCampaign($campaignId)) {
+        if (!$this->canAccessCampaign($campaignId)) {
             return new JSONResponse(['error' => 'forbidden'], Http::STATUS_FORBIDDEN);
         }
         return new JSONResponse($this->scenes->findForCampaign($campaignId));
@@ -58,6 +58,8 @@ class SceneController extends OCSController {
 
     #[NoAdminRequired]
     public function update(int $id, ?string $name = null, ?array $data = null): JSONResponse {
+        // Players may edit scene contents during play (move tokens, save); only
+        // creation and deletion of scenes are owner-only.
         $s = $this->accessibleOr404($id);
         if ($s instanceof JSONResponse) return $s;
         if ($name !== null) $s->setName($name);
@@ -67,8 +69,15 @@ class SceneController extends OCSController {
 
     #[NoAdminRequired]
     public function destroy(int $id): JSONResponse {
-        $s = $this->accessibleOr404($id);
-        if ($s instanceof JSONResponse) return $s;
+        // Deleting a scene is owner-only.
+        try {
+            $s = $this->scenes->find($id);
+        } catch (DoesNotExistException) {
+            return new JSONResponse(['error' => 'not found'], Http::STATUS_NOT_FOUND);
+        }
+        if (!$this->ownsCampaign($s->getCampaignId())) {
+            return new JSONResponse(['error' => 'forbidden'], Http::STATUS_FORBIDDEN);
+        }
         $this->scenes->delete($s);
         return new JSONResponse([], Http::STATUS_NO_CONTENT);
     }
@@ -81,13 +90,27 @@ class SceneController extends OCSController {
         }
     }
 
+    /** Owner or invited player. */
+    private function canAccessCampaign(int $campaignId): bool {
+        try {
+            $campaign = $this->campaigns->find($campaignId);
+        } catch (DoesNotExistException) {
+            return false;
+        }
+        if ($campaign->getOwner() === $this->userId) {
+            return true;
+        }
+        $data = json_decode($campaign->getData() ?? '{}', true) ?: [];
+        return in_array($this->userId, $data['players'] ?? [], true);
+    }
+
     private function accessibleOr404(int $id): Scene|JSONResponse {
         try {
             $s = $this->scenes->find($id);
         } catch (DoesNotExistException) {
             return new JSONResponse(['error' => 'not found'], Http::STATUS_NOT_FOUND);
         }
-        if (!$this->ownsCampaign($s->getCampaignId())) {
+        if (!$this->canAccessCampaign($s->getCampaignId())) {
             return new JSONResponse(['error' => 'forbidden'], Http::STATUS_FORBIDDEN);
         }
         return $s;

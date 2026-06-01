@@ -39,7 +39,8 @@ document.getElementById('roll').onclick = async () => {
   order = [];
   for (const t of items) {
     const r = await GRIM.dice.roll('1d20');           // real physics roll on the table
-    order.push({ id: t.id, label: t.label, init: r?.[0]?.value ?? 0 });
+    const init = r?.total ?? r?.rolls?.[0]?.value ?? 0;
+    order.push({ id: t.id, label: t.label, init });
   }
   order.sort((a, b) => b.init - a.init);
   render();
