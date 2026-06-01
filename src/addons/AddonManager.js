@@ -106,8 +106,15 @@ export class AddonManager {
     }
 
     frame.srcdoc = html;
-    container.appendChild(frame);
     a.frame = frame;
+    container.appendChild(frame);
+    // Belt-and-braces: also push `ready` once the frame loads, in case its
+    // `hello` arrived before a.frame was set (srcdoc timing race).
+    frame.addEventListener('load', () => {
+      try {
+        frame.contentWindow?.postMessage({ __grimoire: true, kind: 'event', event: 'ready' }, '*');
+      } catch { /* ignore */ }
+    });
     return frame;
   }
 
@@ -137,7 +144,21 @@ export class AddonManager {
 
   async _onMessage(e) {
     const msg = e.data;
-    if (!msg || msg.__grimoire !== true || msg.kind !== 'request') return;
+    if (!msg || msg.__grimoire !== true) return;
+
+    // Handshake: an addon announces itself with `hello`; reply with `ready` so
+    // its `await GRIM.ready()` resolves. Without this every addon hangs on the
+    // first await and never wires up its UI.
+    if (msg.kind === 'hello') {
+      const a = this._addonForFrame(e.source);
+      if (a) {
+        e.source.postMessage({ __grimoire: true, kind: 'event', event: 'ready' }, '*');
+        a._ready = true;
+      }
+      return;
+    }
+
+    if (msg.kind !== 'request') return;
     const addon = this._addonForFrame(e.source);
     if (!addon) return; // message not from a known addon frame
 

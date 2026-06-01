@@ -4,6 +4,15 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.4.5] - 2026-06-01
+
+### Fixed
+- **Addons now actually run.** The host ignored the SDK's `hello` handshake and
+  never sent `ready`, so every addon hung on `await GRIM.ready()` before wiring
+  up its UI — the initiative tracker's button did nothing. The host now answers
+  the handshake (and re-sends `ready` on frame load to avoid a srcdoc timing
+  race), so addon calls (getItems, dice.roll, broadcast) work end to end.
+
 ## [0.4.4] - 2026-06-01
 
 ### Fixed
