@@ -22,7 +22,7 @@ Features
 - Real-time multiplayer rooms
 - Addon/extension system so the table can be extended over time
     ]]></description>
-    <version>0.4.5</version>
+    <version>0.4.6</version>
     <licence>agpl</licence>
     <author>Roboman124</author>
     <namespace>Grimoire</namespace>

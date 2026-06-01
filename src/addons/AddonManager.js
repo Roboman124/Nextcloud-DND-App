@@ -99,17 +99,26 @@ export class AddonManager {
       );
     }
 
-    // Inject a <base> so any other relative URLs resolve against the addon host.
-    if (!/<base\s/i.test(html)) {
-      html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${a.manifest._baseUrl}">`);
-      if (!/<base\s/i.test(html)) html = `<base href="${a.manifest._baseUrl}">` + html;
+    // Give the addon document its OWN permissive CSP. A sandboxed iframe would
+    // otherwise inherit Nextcloud's strict nonce-based CSP, which blocks the
+    // addon's inline <script> (and a <base> tag) entirely. We load the HTML as
+    // a blob: URL so it's a real document with an opaque origin that honours
+    // this meta CSP instead of the host page's.
+    const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; img-src * data: blob:; connect-src *;">`;
+    if (/<head[^>]*>/i.test(html)) {
+      html = html.replace(/<head([^>]*)>/i, `<head$1>${csp}`);
+    } else {
+      html = csp + html;
     }
 
-    frame.srcdoc = html;
+    const blob = new Blob([html], { type: 'text/html' });
+    const blobUrl = URL.createObjectURL(blob);
+    a._blobUrl = blobUrl;
+    // Sandboxed but WITHOUT allow-same-origin, so the frame's origin is opaque
+    // and cannot reach the user's Nextcloud session; scripts still run.
+    frame.src = blobUrl;
     a.frame = frame;
     container.appendChild(frame);
-    // Belt-and-braces: also push `ready` once the frame loads, in case its
-    // `hello` arrived before a.frame was set (srcdoc timing race).
     frame.addEventListener('load', () => {
       try {
         frame.contentWindow?.postMessage({ __grimoire: true, kind: 'event', event: 'ready' }, '*');
@@ -121,6 +130,7 @@ export class AddonManager {
   close(id) {
     const a = this.addons.get(id);
     if (a?.frame) { a.frame.remove(); a.frame = null; }
+    if (a?._blobUrl) { URL.revokeObjectURL(a._blobUrl); a._blobUrl = null; }
   }
 
   uninstall(id) { this.close(id); this.addons.delete(id); }

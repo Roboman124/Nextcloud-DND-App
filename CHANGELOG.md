@@ -4,6 +4,16 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.4.6] - 2026-06-01
+
+### Fixed
+- **Addons now execute under Nextcloud's CSP.** A srcdoc iframe inherited the
+  host's strict nonce-based Content-Security-Policy, which blocked the addon's
+  inline script (and the injected <base>) entirely. Addon UIs are now loaded as
+  a blob: URL carrying their own permissive CSP meta tag, and the page CSP
+  allows blob: frames. This is what was actually stopping the initiative
+  tracker's script from running.
+
 ## [0.4.5] - 2026-06-01
 
 ### Fixed

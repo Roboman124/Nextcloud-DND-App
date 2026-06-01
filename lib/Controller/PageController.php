@@ -39,6 +39,7 @@ class PageController extends Controller {
         // iframes, so the CSP needs widening beyond Nextcloud's strict default.
         $csp = new ContentSecurityPolicy();
         $csp->addAllowedFrameDomain('*');          // addon iframes (sandboxed)
+        $csp->addAllowedFrameDomain('blob:');      // addon UIs are loaded as blob: URLs
         $csp->addAllowedConnectDomain('*');        // WS relay + asset CDNs
         $csp->addAllowedImageDomain('*');
         $csp->addAllowedMediaDomain('*');
