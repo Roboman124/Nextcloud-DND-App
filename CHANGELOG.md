@@ -4,6 +4,24 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.4.0] - 2026-05-31
+
+### Added
+- **Real-time multiplayer** via a `RoomController` relay over Nextcloud's
+  distributed cache — token positions, maps, AoE templates, and dice now sync
+  between players in a room with no extra service to deploy (long-poll
+  transport; point `GRIMOIRE_RELAY_URL` at the WS relay for lower latency).
+- **Save button** persisting both 2D and 3D scene state (map + tokens + blocks).
+- **Delete campaign** button (with confirmation).
+- **Player presence indicator** in the room topbar.
+- Discord **dice-roll and player-join events** now fire when those messages
+  flow through the room relay (previously dormant).
+
+### Fixed
+- **Inviting a player now shows a confirmation** instead of silent success.
+- **Extensions "Add" button** now reports success/failure (was failing silently
+  on unreachable/CORS-blocked manifest URLs) and supports removing extensions.
+
 ## [0.3.0] - 2026-05-31
 
 ### Added

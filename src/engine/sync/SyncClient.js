@@ -13,18 +13,22 @@
  * persisted by the backend for durable state (token positions, scene items).
  */
 export class SyncClient {
-  constructor({ url, roomToken, userId, onMessage, onPresence }) {
+  constructor({ url, roomToken, userId, sceneId, onMessage, onPresence }) {
     this.url = url;
     this.roomToken = roomToken;
     this.userId = userId;
+    this.sceneId = sceneId;
     this.onMessage = onMessage || (() => {});
     this.onPresence = onPresence || (() => {});
     this.queue = [];
     this.connected = false;
     this._backoff = 500;
+    this._mode = url ? 'ws' : 'poll'; // no relay url -> long-poll immediately
   }
 
   connect() {
+    // With no relay URL, go straight to the polling transport.
+    if (this._mode === 'poll') return this._fallbackPoll();
     try {
       this.ws = new WebSocket(`${this.url}?token=${encodeURIComponent(this.roomToken)}`);
     } catch (e) {
@@ -53,6 +57,7 @@ export class SyncClient {
 
   send(msg) {
     const full = { ...msg, from: this.userId, t: Date.now() };
+    if (this._mode === 'poll') return this._push(full);
     if (this.connected) this._raw(full);
     else this.queue.push(full);
   }
@@ -62,22 +67,42 @@ export class SyncClient {
     catch { this.queue.push(msg); }
   }
 
-  /** Degraded mode: poll Nextcloud's OCS API when no relay is reachable. */
+  /** Send a message via the Nextcloud push endpoint (polling transport). */
+  async _push(msg) {
+    try {
+      await fetch('/index.php/apps/grimoire/api/room/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'OCS-APIRequest': 'true', requesttoken: window.OC?.requestToken || '' },
+        body: JSON.stringify({ sceneId: this.sceneId, type: msg.type, payload: msg.payload }),
+      });
+    } catch { /* best-effort; next change will retry */ }
+  }
+
+  /** Degraded mode: poll Nextcloud's API when no relay is reachable. */
   async _fallbackPoll() {
     this._polling = true;
+    this.connected = true; // "connected" in the sense that send() works via push
     let cursor = 0;
     const tick = async () => {
       if (!this._polling) return;
       try {
-        const res = await fetch(`/apps/grimoire/api/room/poll?since=${cursor}`, {
-          headers: { 'OCS-APIRequest': 'true' },
-        });
+        const res = await fetch(
+          `/index.php/apps/grimoire/api/room/poll?sceneId=${this.sceneId}&since=${cursor}`,
+          { headers: { 'OCS-APIRequest': 'true', requesttoken: window.OC?.requestToken || '' } }
+        );
         const data = await res.json();
-        for (const m of data.messages || []) this.onMessage(m);
+        for (const m of data.messages || []) {
+          // Don't echo our own messages back to us.
+          if (m.from === this.userId) continue;
+          if (m.type === 'presence') this.onPresence(m.payload);
+          else this.onMessage(m);
+        }
         cursor = data.cursor || cursor;
       } catch { /* keep trying */ }
-      setTimeout(tick, 1200);
+      setTimeout(tick, 1000);
     };
+    // Announce presence so others (and the Discord join hook) see us.
+    this._push({ type: 'join', payload: { userId: this.userId }, from: this.userId });
     tick();
   }
 

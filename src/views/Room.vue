@@ -10,6 +10,12 @@
       </div>
       <span class="scene-title">{{ scene?.name }}</span>
       <span class="spacer" />
+      <span v-if="party.length" class="party-pill" :title="party.join(', ')">
+        👥 {{ party.length }}
+      </span>
+      <button class="topbar-btn save" :disabled="saving" @click="saveScene">
+        {{ saving ? 'Saving…' : (saved ? '✓ Saved' : '💾 Save') }}
+      </button>
       <button class="topbar-btn" @click="showAddons = !showAddons">Extensions</button>
     </div>
 
@@ -96,6 +102,7 @@ export default {
       showAddons: false, showAssets: false,
       diceRoller: null, addonManager: null,
       toast: null, measureUnit: 'ft', aoeShape: 'circle',
+      party: [], saving: false, saved: false, syncReady: false, remoteDice: null,
     };
   },
   async mounted() {
@@ -121,7 +128,12 @@ export default {
     this.diceRoller = new DiceRoller({
       THREE: this.THREE, CANNON: this.CANNON,
       scene: this.scene3d.scene, world: this.scene3d.world,
-      onSettle: (r) => this.sync?.send({ type: 'dice:result', payload: r }),
+      onSettle: (r) => {
+        const rolls = Array.isArray(r) ? r : [];
+        const total = rolls.reduce((sum, d) => sum + (d.value || 0), 0);
+        const notation = rolls.map((d) => d.type).join(' + ');
+        this.sync?.send({ type: 'dice:result', payload: { rolls, total, notation } });
+      },
     });
 
     this.adapters = {
@@ -148,9 +160,49 @@ export default {
     },
 
     hydrate(doc) {
-      for (const t of doc?.tokens || []) {
+      if (!doc) return;
+      if (doc.mapUrl) {
+        this.scene2d.setMap(doc.mapUrl);
+        this.scene3d.setMapTexture(doc.mapUrl);
+      }
+      for (const t of doc.tokens || []) {
         this.scene2d.upsertToken(t);
         this.scene3d.upsertToken({ ...t, kind: t.url ? 'model' : 'primitive', z: t.y });
+      }
+      for (const b of doc.blocks || []) {
+        this.scene3d.addBlock?.(b);
+      }
+    },
+
+    /** Persist both 2D and 3D scene state to the scene's data column. */
+    async saveScene() {
+      this.saving = true;
+      try {
+        const s2 = this.scene2d.serialize();
+        const s3 = this.scene3d.serialize();
+        // Merge into one document. Tokens are shared across modes; keep the
+        // union keyed by id, and store each mode's map + 3D blocks.
+        const byId = new Map();
+        for (const t of [...s2.tokens, ...s3.tokens]) byId.set(t.id, { ...byId.get(t.id), ...t });
+        const doc = {
+          mapUrl: s2.mapUrl || s3.mapUrl || null,
+          map2d: s2.mapUrl || null,
+          map3d: s3.mapUrl || null,
+          tokens: [...byId.values()],
+          blocks: s3.blocks || [],
+        };
+        await axios.put(generateUrl(`/apps/grimoire/api/scenes/${this.sceneId}`), {
+          name: this.scene?.name,
+          data: doc,
+        });
+        this.saved = true;
+        setTimeout(() => { this.saved = false; }, 2500);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('[grimoire] save failed', e);
+        this._notify('Save failed — check you have access to this scene.');
+      } finally {
+        this.saving = false;
       }
     },
 
@@ -160,11 +212,17 @@ export default {
           generateUrl(`/apps/grimoire/api/scenes/${this.sceneId}/room-token`));
         this.sync = new SyncClient({
           url: data.relayUrl, roomToken: data.token, userId: this.userId,
+          sceneId: this.sceneId,
           onMessage: (m) => this.onRemote(m),
+          onPresence: (players) => { this.party = players || []; },
         });
         this.sync.connect();
-      } catch {
-        // Relay not yet set up — run in local-only mode silently.
+        this.syncReady = true;
+      } catch (e) {
+        // Token endpoint missing or access denied — local-only mode.
+        // eslint-disable-next-line no-console
+        console.warn('[grimoire] sync unavailable, running local-only', e);
+        this.syncReady = false;
       }
     },
 
@@ -173,12 +231,30 @@ export default {
       this.scene2d.applyRemote(m);
       if (m.type === 'token:move')
         this.scene3d.upsertToken({ id: m.payload.id, x: m.payload.x, z: m.payload.y });
+      if (m.type === 'token:upsert') {
+        this.scene2d.upsertToken(m.payload);
+        this.scene3d.upsertToken({ ...m.payload, kind: m.payload.url ? 'model' : 'primitive', z: m.payload.y });
+      }
+      if (m.type === 'token:remove') {
+        this.scene2d.removeToken(m.payload.id);
+        this.scene3d.removeToken(m.payload.id);
+      }
+      if (m.type === 'map:set') {
+        this.scene2d.setMap(m.payload.url);
+        this.scene3d.setMapTexture(m.payload.url);
+      }
       if (m.type === 'aoe:set') this.scene3d.setAoE(m.payload.id, m.payload);
       if (m.type === 'aoe:remove') {
         this.scene3d.clearAoE?.(m.payload.id);
         this.adapters['2d'].removeAoE?.(m.payload.id);
       }
+      if (m.type === 'dice:result') {
+        // Show other players' rolls in the tray.
+        this.remoteDice = m.payload;
+        setTimeout(() => { if (this.remoteDice === m.payload) this.remoteDice = null; }, 5000);
+      }
       this.addonManager?.emit('scene:change', m);
+      if (m.type === 'dice:result') this.addonManager?.emit('dice:result', m.payload);
     },
 
     setupAddons() {
@@ -351,6 +427,10 @@ function makeAddonTool(addon, def, manager) {
   border-radius: var(--g-radius, 8px); padding: 5px 12px; cursor: pointer;
 }
 .topbar-btn:hover { border-color: var(--g-primary, #0082c9); }
+.topbar-btn.save { background: var(--g-primary, #0082c9); color: #fff; border-color: var(--g-primary, #0082c9); }
+.topbar-btn.save:disabled { opacity: .6; cursor: default; }
+.party-pill { font-size: 12px; color: var(--g-text-dim, #8b949e); padding: 4px 10px;
+  border: 1px solid var(--g-border, #2d3748); border-radius: 20px; margin-right: 8px; }
 .topbar-btn.back { color: var(--g-text-dim, #8b949e); }
 
 .surface { position: relative; flex: 1; overflow: hidden; }

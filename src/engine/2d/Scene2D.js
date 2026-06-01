@@ -103,12 +103,21 @@ export class Scene2D {
 
   async setMap(url) {
     const { Konva } = this;
+    this._mapUrl = url;
     const img = await loadImage(url);
     this.layers.map.destroyChildren();
     const node = new Konva.Image({ image: img, x: 0, y: 0 });
     this.layers.map.add(node);
     this.layers.map.batchDraw();
     this._emit('map:set', { url });
+  }
+
+  /** Serialize the 2D scene to a plain object for persistence. */
+  serialize() {
+    return {
+      mapUrl: this._mapUrl || null,
+      tokens: [...this.tokens.values()].map((e) => ({ ...e.data })),
+    };
   }
 
   /** token = {id, url?, color?, x, y, size, label}. */

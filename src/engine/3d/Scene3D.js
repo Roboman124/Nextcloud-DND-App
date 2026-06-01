@@ -94,11 +94,21 @@ export class Scene3D {
 
   async setMapTexture(url) {
     const { THREE } = this;
+    this._mapUrl = url;
     const tex = await new THREE.TextureLoader().loadAsync(url);
     tex.colorSpace = THREE.SRGBColorSpace;
     this.ground.material.map = tex;
     this.ground.material.color.set(0xffffff);
     this.ground.material.needsUpdate = true;
+  }
+
+  /** Serialize the 3D scene to a plain object for persistence. */
+  serialize() {
+    return {
+      mapUrl: this._mapUrl || null,
+      tokens: [...this.tokens.values()].map((e) => ({ ...e.data })),
+      blocks: [...(this.blocks?.values() || [])].map((b) => ({ ...b.data })),
+    };
   }
 
   /**

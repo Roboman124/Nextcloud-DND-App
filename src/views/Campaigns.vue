@@ -29,6 +29,7 @@
             <button class="ghost small" @click="toggleManage(c.id)">
               {{ managing === c.id ? '▲ Close' : '⚙ Manage' }}
             </button>
+            <button class="ghost small danger" title="Delete campaign" @click="deleteCampaign(c)">🗑</button>
           </div>
         </div>
 
@@ -86,9 +87,10 @@
                 </li>
               </ul>
             </div>
+            <p v-if="inviteFlash[c.id]" class="remind-status" :class="inviteFlash[c.id].ok ? 'ok' : 'err'">
+              {{ inviteFlash[c.id].msg }}
+            </p>
           </section>
-
-          <!-- Session scheduling -->
           <section class="manage-section">
             <h3>Next Session</h3>
             <div class="session-row">
@@ -172,6 +174,7 @@ export default {
       _searchTimer: {},
       sending: {},
       reminderStatus: {},
+      inviteFlash: {},
     };
   },
   async mounted() {
@@ -179,6 +182,24 @@ export default {
   },
   methods: {
     api(path) { return generateUrl('/apps/grimoire/api' + path); },
+
+    flash(id, msg, ok = true) {
+      this.inviteFlash[id] = { msg, ok };
+      clearTimeout(this._flashTimer?.[id]);
+      this._flashTimer = this._flashTimer || {};
+      this._flashTimer[id] = setTimeout(() => { this.inviteFlash[id] = null; }, 4000);
+    },
+
+    async deleteCampaign(c) {
+      if (!confirm(`Delete campaign "${c.title}" and all its scenes? This cannot be undone.`)) return;
+      try {
+        await axios.delete(this.api(`/campaigns/${c.id}`));
+        this.campaigns = this.campaigns.filter((x) => x.id !== c.id);
+        if (this.managing === c.id) this.managing = null;
+      } catch {
+        alert('Failed to delete campaign.');
+      }
+    },
 
     async load() {
       const { data } = await axios.get(this.api('/campaigns'));
@@ -253,12 +274,14 @@ export default {
 
     async addPlayer(campaign, user) {
       const uid = typeof user === 'string' ? user : user.uid;
+      const name = typeof user === 'string' ? user : (user.displayName || user.uid);
       const cd = this.campaignData[campaign.id];
       if (!cd.players.includes(uid)) cd.players.push(uid);
       this.inviteSearch[campaign.id] = '';
       this.userResults[campaign.id] = [];
       await this._saveCampaignData(campaign);
       await this.loadRoster(campaign.id);
+      this.flash(campaign.id, `${name} added to the campaign.`, true);
     },
 
     async removePlayer(campaign, uid) {
