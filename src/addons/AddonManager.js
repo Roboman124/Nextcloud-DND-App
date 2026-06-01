@@ -35,23 +35,77 @@ export class AddonManager {
   }
 
   async install(manifestUrl) {
-    const manifest = await fetch(manifestUrl).then((r) => r.json());
+    const manifest = await fetch(manifestUrl).then((r) => {
+      if (!r.ok) throw new Error(`manifest fetch ${r.status}`);
+      return r.json();
+    });
     const id = slug(manifest.name) + '@' + manifest.version;
     if (this.addons.has(id)) return id;
+    // Resolve the manifest's own URL so we can fetch sibling files (main, sdk).
+    manifest._baseUrl = new URL('.', manifestUrl).href;
     this.addons.set(id, { manifest, frame: null, permissions: new Set(manifest.permissions || []) });
     return id;
   }
 
-  /** Mount an addon's UI into a container (popover / side panel). */
-  open(id, container) {
+  /**
+   * Mount an addon's UI. We do NOT point the iframe.src at the remote URL —
+   * many hosts (GitHub raw, etc.) send X-Frame-Options/CSP that forbid framing,
+   * which is what causes "refused to connect". Instead we FETCH the addon's HTML
+   * as text and load it via `srcdoc`, which runs as an opaque-origin document
+   * not subject to the remote server's framing headers. The SDK import is
+   * rewritten to an absolute URL (or inlined) so it still resolves.
+   */
+  async open(id, container) {
     const a = this.addons.get(id);
     if (!a) throw new Error('Unknown addon ' + id);
     const frame = document.createElement('iframe');
-    frame.src = a.manifest.main;
-    // Sandboxed: scripts run, but no same-origin access to the host page.
     frame.sandbox = 'allow-scripts allow-forms allow-popups';
     frame.style.cssText = 'width:100%;height:100%;border:0;background:transparent';
     frame.dataset.addonId = id;
+
+    let html;
+    try {
+      html = await fetch(a.manifest.main).then((r) => {
+        if (!r.ok) throw new Error(`main fetch ${r.status}`);
+        return r.text();
+      });
+    } catch (e) {
+      throw new Error(`couldn't load addon UI: ${e.message}. Host it somewhere fetchable (CORS-enabled).`);
+    }
+
+    // The SDK is normally imported with `import { GRIM } from './grimoire-sdk.js'`.
+    // A cross-origin import (e.g. from GitHub raw) fails on MIME type, so we
+    // fetch the SDK text and INLINE it: strip the import line and prepend the
+    // SDK source (with its `export`s removed) so `GRIM` is just in scope.
+    let sdkSource = '';
+    try {
+      const sdkUrl = new URL('grimoire-sdk.js', a.manifest._baseUrl).href;
+      sdkSource = await fetch(sdkUrl).then((r) => (r.ok ? r.text() : ''));
+    } catch { /* fall through; addon may not use the SDK */ }
+    if (sdkSource) {
+      // Remove ES export keywords so the source can be inlined into a module.
+      sdkSource = sdkSource
+        .replace(/export\s+const\s+GRIM/g, 'const GRIM')
+        .replace(/export\s+default\s+GRIM\s*;?/g, '');
+      // Drop the addon's own import of the SDK; GRIM will already be in scope.
+      html = html.replace(
+        /import\s*\{?\s*GRIM\s*\}?\s*from\s*['"](\.\/)?grimoire-sdk\.js['"]\s*;?/g,
+        ''
+      );
+      // Prepend the SDK into the first module script.
+      html = html.replace(
+        /<script\s+type=["']module["']\s*>/i,
+        (m) => `${m}\n/* --- inlined Grimoire SDK --- */\n${sdkSource}\n/* --- end SDK --- */\n`
+      );
+    }
+
+    // Inject a <base> so any other relative URLs resolve against the addon host.
+    if (!/<base\s/i.test(html)) {
+      html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${a.manifest._baseUrl}">`);
+      if (!/<base\s/i.test(html)) html = `<base href="${a.manifest._baseUrl}">` + html;
+    }
+
+    frame.srcdoc = html;
     container.appendChild(frame);
     a.frame = frame;
     return frame;
@@ -98,6 +152,7 @@ export class AddonManager {
       'scene.updateItem': 'scene:write',
       'scene.deleteItem': 'scene:write',
       'tool.create': 'tool',
+      'action.create': 'tool',
       'broadcast.send': 'broadcast',
       'metadata.get': 'metadata',
       'metadata.set': 'metadata',
@@ -126,6 +181,7 @@ export class AddonManager {
       case 'scene.updateItem': return c.sceneWrite('update', params);
       case 'scene.deleteItem': return c.sceneWrite('delete', params);
       case 'tool.create': return c.createTool(addon, params);
+      case 'action.create': return c.createAction(addon, params);
       case 'broadcast.send': return c.broadcast(params);
       case 'metadata.get': return c.metadataGet(addon, params);
       case 'metadata.set': return c.metadataSet(addon, params);

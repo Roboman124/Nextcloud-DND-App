@@ -69,6 +69,12 @@ export const GRIM = {
     onClick: (toolId, fn) => on('tool:click:' + toolId, fn),
   },
 
+  /** Add a button to the app sidebar that opens this addon's panel. */
+  action: {
+    create: (def) => request('action.create', def),
+    onOpen: (fn) => on('action:open', fn),
+  },
+
   dice: {
     roll: (notation, opts) => request('dice.roll', { notation, ...opts }),
     onResult: (fn) => on('dice:result', fn),

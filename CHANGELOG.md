@@ -4,6 +4,20 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.4.1] - 2026-06-01
+
+### Fixed
+- **Measure tool now shows the distance** as a screen-space label that stays
+  legible at any zoom, in both 2D and 3D (the 3D label was never rendered).
+- **Extensions load locally** — addon UIs are now fetched and mounted via iframe
+  `srcdoc` with the SDK inlined, so plugins hosted on GitHub (which sends
+  `X-Frame-Options: deny` on raw files, causing "refused to connect") work.
+
+### Added
+- **Addon sidebar actions** — plugins can call `GRIM.action.create({id,name,icon})`
+  to add a button to the room toolbar that opens their panel. The example
+  initiative tracker now registers one.
+
 ## [0.4.0] - 2026-05-31
 
 ### Added

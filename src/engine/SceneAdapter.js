@@ -45,19 +45,23 @@ export class Scene2DAdapter {
     if (!this._measure) {
       this._measure = {
         line: new Konva.Line({ stroke: '#e0c068', strokeWidth: 3, dash: [10, 6] }),
-        text: new Konva.Text({ fill: '#fff', fontSize: 18, fontStyle: 'bold',
-          shadowColor: '#000', shadowBlur: 4 }),
       };
-      layer.add(this._measure.line); layer.add(this._measure.text);
+      layer.add(this._measure.line);
     }
     this._measure.line.points([a.x, a.y, b.x, b.y]);
-    this._measure.text.position({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 24 });
-    this._measure.text.text(label);
     layer.batchDraw();
+    // Label is drawn as an HTML overlay (screen space) so it's always legible
+    // regardless of zoom. Project the world midpoint to screen via the stage.
+    const stage = this.scene.stage;
+    const tr = stage.getAbsoluteTransform();
+    const mid = tr.point({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    const rect = stage.container().getBoundingClientRect();
+    this.onMeasure?.({ label, screenX: rect.left + mid.x, screenY: rect.top + mid.y });
   }
   clearMeasurement() {
-    if (this._measure) { this._measure.line.destroy(); this._measure.text.destroy(); this._measure = null; }
+    if (this._measure) { this._measure.line.destroy(); this._measure = null; }
     this.scene.getLayer('overlay').batchDraw();
+    this.onMeasure?.(null);
   }
 
   setAoE(id, t) {
@@ -171,9 +175,22 @@ export class Scene3DAdapter {
     this._measure.geometry.setFromPoints([
       new THREE.Vector3(a.x, 0.1, a.z), new THREE.Vector3(b.x, 0.1, b.z),
     ]);
-    this._label = label; // a real build would project this to an HTML overlay
+    // Project the 3D midpoint to screen coordinates for the HTML label.
+    const camera = this.scene.camera;
+    const canvas = this.scene.renderer?.domElement;
+    if (camera && canvas) {
+      const mid = new THREE.Vector3((a.x + b.x) / 2, 0.1, (a.z + b.z) / 2);
+      mid.project(camera);
+      const rect = canvas.getBoundingClientRect();
+      const sx = rect.left + (mid.x * 0.5 + 0.5) * rect.width;
+      const sy = rect.top + (-mid.y * 0.5 + 0.5) * rect.height;
+      this.onMeasure?.({ label, screenX: sx, screenY: sy });
+    }
   }
-  clearMeasurement() { if (this._measure) { this.scene.scene.remove(this._measure); this._measure = null; } }
+  clearMeasurement() {
+    if (this._measure) { this.scene.scene.remove(this._measure); this._measure = null; }
+    this.onMeasure?.(null);
+  }
 
   setAoE(id, t) { this.scene.setAoE(id, t); }
   removeAoE(id) { this.scene.clearAoE?.(id); }

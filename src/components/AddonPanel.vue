@@ -62,13 +62,19 @@ export default {
       this.manager.uninstall(id);
       this.refresh();
     },
-    open(id) {
+    async open(id) {
       this.$refs.mount.innerHTML = '';
       try {
-        this.manager.open(id, this.$refs.mount);
+        await this.manager.open(id, this.$refs.mount);
       } catch (e) {
         this.status = { ok: false, msg: `Couldn't open: ${e.message || e}` };
+        setTimeout(() => { this.status = null; }, 7000);
       }
+    },
+    /** Programmatic open used by addon sidebar actions. */
+    async openById(id) {
+      this.refresh();
+      await this.open(id);
     },
   },
   mounted() { this.refresh(); },

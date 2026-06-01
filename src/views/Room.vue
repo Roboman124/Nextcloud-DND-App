@@ -32,6 +32,13 @@
           @click="activate(t.id)">{{ icon(t.id) }}</button>
         <div class="tool-divider" />
         <button class="tool" :class="{on: showAssets}" title="Assets" @click="showAssets = !showAssets">📂</button>
+        <template v-if="addonActions.length">
+          <div class="tool-divider" />
+          <button
+            v-for="act in addonActions" :key="act.id"
+            class="tool addon-action" :title="act.label"
+            @click="openAddonAction(act)">{{ act.icon }}</button>
+        </template>
       </div>
 
       <!-- Hint bar -->
@@ -58,6 +65,14 @@
       <!-- Transient toast (model load errors etc.) -->
       <div v-if="toast" class="toast">{{ toast }}</div>
 
+      <!-- Measurement label (screen space, follows the ruler midpoint) -->
+      <div
+        v-if="measureLabel"
+        class="measure-label"
+        :style="{ left: measureLabel.screenX + 'px', top: measureLabel.screenY + 'px' }">
+        {{ measureLabel.label }}
+      </div>
+
       <!-- Dice tray -->
       <DiceTray :roller="diceRoller" @ensure3d="setMode('3d')" />
 
@@ -71,7 +86,7 @@
       />
 
       <!-- Addon panel -->
-      <AddonPanel v-if="showAddons" :manager="addonManager" @close="showAddons=false" />
+      <AddonPanel v-if="showAddons" ref="addonPanel" :manager="addonManager" @close="showAddons=false" />
     </div>
   </div>
 </template>
@@ -103,6 +118,8 @@ export default {
       diceRoller: null, addonManager: null,
       toast: null, measureUnit: 'ft', aoeShape: 'circle',
       party: [], saving: false, saved: false, syncReady: false, remoteDice: null,
+      measureLabel: null,
+      addonActions: [],
     };
   },
   async mounted() {
@@ -140,6 +157,11 @@ export default {
       '2d': new Scene2DAdapter(this.scene2d, { THREE: this.THREE }),
       '3d': new Scene3DAdapter(this.scene3d, { THREE: this.THREE }),
     };
+    // Measurement labels render as a screen-space HTML overlay (works in both
+    // 2D and 3D regardless of zoom/camera).
+    const onMeasure = (m) => { this.measureLabel = m; };
+    this.adapters['2d'].onMeasure = onMeasure;
+    this.adapters['3d'].onMeasure = onMeasure;
 
     await this.connectSync();
     this.setupAddons();
@@ -271,6 +293,12 @@ export default {
           },
           createTool: (addon, def) =>
             this.tools.register(makeAddonTool(addon, def, this.addonManager)),
+          createAction: (addon, def) => {
+            // Register a sidebar button that opens this addon's panel.
+            const action = { id: def.id || addon.manifest.name, label: def.name || def.label || addon.manifest.name, icon: def.icon || '🧩', addonId: [...this.addonManager.addons.entries()].find(([, x]) => x === addon)?.[0] };
+            this.addonActions = this.addonActions.filter((x) => x.id !== action.id).concat(action);
+            return true;
+          },
           broadcast: (p) => this.sync?.send({ type: 'broadcast:' + p.channel, payload: p.payload }),
           metadataGet: () => ({}),
           metadataSet: () => true,
@@ -292,6 +320,16 @@ export default {
     },
     setMode(m) { if (m === this.mode) return; this.mode = m; this.applyMode(); },
     activate(id) { this.tools.activate(id); this.activeTool = id; },
+
+    openAddonAction(act) {
+      // Open the extensions panel and tell the addon its action was invoked.
+      this.showAddons = true;
+      this.addonManager?.emit('action:open', { id: act.id });
+      // Defer so the panel exists, then mount the addon's UI.
+      this.$nextTick(() => {
+        if (act.addonId) this.$refs.addonPanel?.openById?.(act.addonId);
+      });
+    },
 
     setMeasureUnit(u) {
       this.measureUnit = u;
@@ -485,6 +523,12 @@ function makeAddonTool(addon, def, manager) {
 .tool-options .opt-hint { font-size: 10px; color: var(--g-text-dim, #8b949e); font-style: italic; }
 
 /* Transient toast */
+.measure-label {
+  position: fixed; transform: translate(-50%, -140%);
+  background: rgba(20,24,31,.92); color: #ffe9a8; font-weight: 700;
+  font-size: 14px; padding: 4px 10px; border-radius: 8px;
+  border: 1px solid #e0c068; pointer-events: none; z-index: 30; white-space: nowrap;
+}
 .toast {
   position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
   background: #2a0f0c; border: 1px solid #b3402f; color: #f3d9a0;

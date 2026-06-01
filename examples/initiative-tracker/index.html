@@ -21,6 +21,10 @@
 import { GRIM } from './grimoire-sdk.js';
 
 await GRIM.ready();
+
+// Register a sidebar button so players can reopen the tracker from the toolbar.
+GRIM.action.create({ id: 'initiative', name: 'Initiative', icon: '⚔' });
+
 const list = document.getElementById('list');
 let order = [];
 
