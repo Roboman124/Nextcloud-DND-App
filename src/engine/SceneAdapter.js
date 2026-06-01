@@ -16,6 +16,11 @@ export class Scene2DAdapter {
     this._measure = null;
   }
 
+  // Snap toggle delegates to the scene so the Konva dragend handler and the
+  // GrabTool agree on the same setting.
+  get snapEnabled() { return this.scene.snapEnabled !== false; }
+  set snapEnabled(v) { this.scene.snapEnabled = v; }
+
   /** Convert a Konva stage event into world (scene) coordinates. */
   worldPointFromEvent() {
     const stage = this.scene.stage;
@@ -141,11 +146,24 @@ export class Scene3DAdapter {
     this.raycaster = new THREE.Raycaster();
     this._pointer = null;
     this._measure = null;
+    this.snapEnabled = true;
+    this.is3D = true;
+  }
+
+  addBlock(data) { this.scene.addBlock(data); }
+  removeBlock(id) { this.scene.removeBlock(id); }
+  /** ndc/world point -> blockId under cursor, or null. */
+  pickBlock(w) {
+    // w may be a world point; convert via raycaster needs ndc, so the view
+    // passes ndc through the event. Fall back to nearest-block by distance.
+    const hit = this.scene.pickBuild(this._lastNdc || { x: 0, y: 0 }, this.raycaster);
+    return hit?.blockId || null;
   }
 
   /** Cast the cursor onto the ground plane to get a world point. */
   worldPointFromEvent(ndc) {
     // ndc = {x,y} in normalized device coords (-1..1), supplied by the view.
+    this._lastNdc = ndc;
     this.raycaster.setFromCamera(ndc, this.scene.camera);
     const hits = this.raycaster.intersectObject(this.scene.ground);
     if (hits.length) return { x: hits[0].point.x, y: 0, z: hits[0].point.z };

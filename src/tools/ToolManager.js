@@ -46,6 +46,8 @@ export class ToolManager {
     this.register(new GrabTool());
     this.register(new MeasureTool());
     this.register(new AoETool());
+    // Map-building is 3D-only (placing primitives in space).
+    if (this.adapter && this.adapter.is3D) this.register(new BuildTool());
     this.activate('pointer');
   }
 }
@@ -101,9 +103,11 @@ export class GrabTool extends Tool {
   }
   onPointerUp(w) {
     if (!this.selected) return;
-    const snapped = this.adapter.snapToGrid?.(w) || w;
-    this.adapter.moveToken?.(this.selected.id, snapped);
-    this.sync?.send({ type: 'token:move', payload: { id: this.selected.id, ...snapped } });
+    // Snap only when the adapter has snapping enabled (toggleable in the UI).
+    const useSnap = this.adapter.snapEnabled !== false;
+    const dest = useSnap ? (this.adapter.snapToGrid?.(w) || w) : w;
+    this.adapter.moveToken?.(this.selected.id, dest);
+    this.sync?.send({ type: 'token:move', payload: { id: this.selected.id, ...dest } });
     this.selected = null;
   }
 }
@@ -134,8 +138,12 @@ export class MeasureTool extends Tool {
   onPointerMove(w) {
     if (!this.start) return;
     const sq = this.adapter.gridSize || 1;
+    // The "vertical" world axis differs by mode: 2D points are {x,y}; 3D points
+    // are {x, y=height≈0, z=depth}. Use z when it's present (3D), else y (2D).
+    const aV = this.start.z !== undefined ? this.start.z : this.start.y;
+    const bV = w.z !== undefined ? w.z : w.y;
     const dx = w.x - this.start.x;
-    const dy = (w.y ?? w.z) - (this.start.y ?? this.start.z);
+    const dy = bV - aV;
     const squares = Math.hypot(dx, dy) / sq;
     this.adapter.showMeasurement(this.start, w, this._format(squares));
   }
@@ -186,5 +194,45 @@ export class AoETool extends Tool {
   }
   clearAll() {
     for (const id of [...this.placed]) this.delete(id);
+  }
+}
+
+/**
+ * BuildTool — map building in 3D. Left-click places the currently-selected
+ * primitive (box/cylinder/sphere/cone/ramp) at the cursor; right-click deletes
+ * the block under the cursor. Block size/colour come from the tool's current
+ * settings (driven by the build palette UI). All placements broadcast.
+ */
+export class BuildTool extends Tool {
+  constructor() {
+    super('build', 'Build', 'cube');
+    this.shape = 'box';
+    this.color = '#6b5d4f';
+    this.size = { w: 1, h: 1, d: 1 };
+    this.placed = new Set();
+  }
+  setShape(s) { this.shape = s; }
+  setColor(c) { this.color = c; }
+  setSize(s) { this.size = { ...this.size, ...s }; }
+  onPointerDown(w) {
+    // w is a world point on the ground (adapter provides {x,y,z}).
+    const id = 'blk_' + Math.random().toString(36).slice(2, 8);
+    const data = {
+      id, shape: this.shape, color: this.color,
+      x: Math.round(w.x), z: Math.round(w.z ?? w.y),
+      y: this.size.h / 2,
+      w: this.size.w, h: this.size.h, d: this.size.d,
+    };
+    this.adapter.addBlock?.(data);
+    this.placed.add(id);
+    this.sync?.send({ type: 'block:set', payload: data });
+  }
+  onContext(w) {
+    const id = this.adapter.pickBlock?.(w);
+    if (id) {
+      this.adapter.removeBlock?.(id);
+      this.placed.delete(id);
+      this.sync?.send({ type: 'block:remove', payload: { id } });
+    }
   }
 }

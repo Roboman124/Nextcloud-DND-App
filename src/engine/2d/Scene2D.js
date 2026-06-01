@@ -146,10 +146,13 @@ export class Scene2D {
       group.add(label);
 
       group.on('dragend', () => {
-        // Snap to grid centre.
-        const gx = Math.round(group.x() / this.gridSize) * this.gridSize;
-        const gy = Math.round(group.y() / this.gridSize) * this.gridSize;
-        group.position({ x: gx, y: gy });
+        let gx = group.x(), gy = group.y();
+        if (this.snapEnabled !== false) {
+          // Snap to grid centre when snapping is on.
+          gx = Math.round(group.x() / this.gridSize) * this.gridSize;
+          gy = Math.round(group.y() / this.gridSize) * this.gridSize;
+          group.position({ x: gx, y: gy });
+        }
         this.layers.tokens.batchDraw();
         this._emit('token:move', { id: token.id, x: gx, y: gy });
       });

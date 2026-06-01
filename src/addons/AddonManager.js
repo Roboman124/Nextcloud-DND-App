@@ -35,88 +35,40 @@ export class AddonManager {
   }
 
   async install(manifestUrl) {
+    // Idempotent by URL: if already installed, return its id.
+    for (const [id, a] of this.addons) {
+      if (a.manifest && a.manifest._installUrl === manifestUrl) return id;
+    }
     const manifest = await fetch(manifestUrl).then((r) => {
       if (!r.ok) throw new Error(`manifest fetch ${r.status}`);
       return r.json();
     });
+    manifest._installUrl = manifestUrl;
+    manifest._baseUrl = new URL('.', manifestUrl).href;
     const id = slug(manifest.name) + '@' + manifest.version;
     if (this.addons.has(id)) return id;
-    // Resolve the manifest's own URL so we can fetch sibling files (main, sdk).
-    manifest._baseUrl = new URL('.', manifestUrl).href;
     this.addons.set(id, { manifest, frame: null, permissions: new Set(manifest.permissions || []) });
     return id;
   }
 
   /**
-   * Mount an addon's UI. We do NOT point the iframe.src at the remote URL —
-   * many hosts (GitHub raw, etc.) send X-Frame-Options/CSP that forbid framing,
-   * which is what causes "refused to connect". Instead we FETCH the addon's HTML
-   * as text and load it via `srcdoc`, which runs as an opaque-origin document
-   * not subject to the remote server's framing headers. The SDK import is
-   * rewritten to an absolute URL (or inlined) so it still resolves.
+   * Mount an addon's UI by loading its entry page through our same-origin proxy
+   * (AddonProxyController). The proxy serves the third-party HTML from OUR
+   * origin with a relaxed CSP, so the addon's inline scripts run — which neither
+   * a direct cross-origin src (X-Frame-Options) nor blob/srcdoc (inherited
+   * nonce CSP) allowed. The proxy also rewrites the addon's relative URLs
+   * (including the SDK import) to stay proxied, so the SDK loads as a normal
+   * module.
    */
-  async open(id, container) {
+  open(id, container) {
     const a = this.addons.get(id);
     if (!a) throw new Error('Unknown addon ' + id);
     const frame = document.createElement('iframe');
     frame.sandbox = 'allow-scripts allow-forms allow-popups';
     frame.style.cssText = 'width:100%;height:100%;border:0;background:transparent';
     frame.dataset.addonId = id;
-
-    let html;
-    try {
-      html = await fetch(a.manifest.main).then((r) => {
-        if (!r.ok) throw new Error(`main fetch ${r.status}`);
-        return r.text();
-      });
-    } catch (e) {
-      throw new Error(`couldn't load addon UI: ${e.message}. Host it somewhere fetchable (CORS-enabled).`);
-    }
-
-    // The SDK is normally imported with `import { GRIM } from './grimoire-sdk.js'`.
-    // A cross-origin import (e.g. from GitHub raw) fails on MIME type, so we
-    // fetch the SDK text and INLINE it: strip the import line and prepend the
-    // SDK source (with its `export`s removed) so `GRIM` is just in scope.
-    let sdkSource = '';
-    try {
-      const sdkUrl = new URL('grimoire-sdk.js', a.manifest._baseUrl).href;
-      sdkSource = await fetch(sdkUrl).then((r) => (r.ok ? r.text() : ''));
-    } catch { /* fall through; addon may not use the SDK */ }
-    if (sdkSource) {
-      // Remove ES export keywords so the source can be inlined into a module.
-      sdkSource = sdkSource
-        .replace(/export\s+const\s+GRIM/g, 'const GRIM')
-        .replace(/export\s+default\s+GRIM\s*;?/g, '');
-      // Drop the addon's own import of the SDK; GRIM will already be in scope.
-      html = html.replace(
-        /import\s*\{?\s*GRIM\s*\}?\s*from\s*['"](\.\/)?grimoire-sdk\.js['"]\s*;?/g,
-        ''
-      );
-      // Prepend the SDK into the first module script.
-      html = html.replace(
-        /<script\s+type=["']module["']\s*>/i,
-        (m) => `${m}\n/* --- inlined Grimoire SDK --- */\n${sdkSource}\n/* --- end SDK --- */\n`
-      );
-    }
-
-    // Give the addon document its OWN permissive CSP. A sandboxed iframe would
-    // otherwise inherit Nextcloud's strict nonce-based CSP, which blocks the
-    // addon's inline <script> (and a <base> tag) entirely. We load the HTML as
-    // a blob: URL so it's a real document with an opaque origin that honours
-    // this meta CSP instead of the host page's.
-    const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; img-src * data: blob:; connect-src *;">`;
-    if (/<head[^>]*>/i.test(html)) {
-      html = html.replace(/<head([^>]*)>/i, `<head$1>${csp}`);
-    } else {
-      html = csp + html;
-    }
-
-    const blob = new Blob([html], { type: 'text/html' });
-    const blobUrl = URL.createObjectURL(blob);
-    a._blobUrl = blobUrl;
-    // Sandboxed but WITHOUT allow-same-origin, so the frame's origin is opaque
-    // and cannot reach the user's Nextcloud session; scripts still run.
-    frame.src = blobUrl;
+    const proxied = '/index.php/apps/grimoire/addon-proxy?url=' + encodeURIComponent(a.manifest.main);
+    frame.src = proxied;
     a.frame = frame;
     container.appendChild(frame);
     frame.addEventListener('load', () => {

@@ -32,6 +32,10 @@
           @click="activate(t.id)">{{ icon(t.id) }}</button>
         <div class="tool-divider" />
         <button class="tool" :class="{on: showAssets}" title="Assets" @click="showAssets = !showAssets">📂</button>
+        <div class="tool-divider" />
+        <button class="tool" :class="{on: snapEnabled}" :title="snapEnabled ? 'Snap to grid (on)' : 'Free movement (snap off)'" @click="toggleSnap">
+          {{ snapEnabled ? '🧲' : '✥' }}
+        </button>
         <template v-if="addonActions.length">
           <div class="tool-divider" />
           <button
@@ -60,6 +64,16 @@
         <span class="opt-sep" />
         <button class="danger" @click="clearAoe" title="Remove all your AoE templates">Clear</button>
         <span class="opt-hint">right-click a template to delete</span>
+      </div>
+      <div v-else-if="activeTool === 'build'" class="tool-options build-palette">
+        <span class="opt-label">Block</span>
+        <button v-for="s in ['box','cylinder','sphere','cone','ramp']" :key="s"
+          :class="{on: buildShape===s}" @click="setBuildShape(s)">{{ s }}</button>
+        <span class="opt-sep" />
+        <label class="opt-label">Colour <input type="color" v-model="buildColor" @change="setBuildColor" class="build-color" /></label>
+        <span class="opt-sep" />
+        <label class="opt-label">H<input type="range" min="0.25" max="6" step="0.25" v-model.number="buildHeight" @input="setBuildSize" class="build-range" />{{ buildHeight }}</label>
+        <span class="opt-hint">left-click place · right-click delete</span>
       </div>
 
       <!-- Transient toast (model load errors etc.) -->
@@ -120,6 +134,8 @@ export default {
       party: [], saving: false, saved: false, syncReady: false, remoteDice: null,
       measureLabel: null,
       addonActions: [],
+      snapEnabled: true,
+      buildShape: 'box', buildColor: '#6b5d4f', buildHeight: 1,
     };
   },
   async mounted() {
@@ -178,7 +194,7 @@ export default {
   },
   methods: {
     icon(id) {
-      return { pointer: '➤', grab: '✋', measure: '📏', aoe: '✸' }[id] || '•';
+      return { pointer: '➤', grab: '✋', measure: '📏', aoe: '✸', build: '🧱' }[id] || '•';
     },
 
     hydrate(doc) {
@@ -269,6 +285,8 @@ export default {
         this.scene3d.setMapTexture(m.payload.url);
       }
       if (m.type === 'aoe:set') this.scene3d.setAoE(m.payload.id, m.payload);
+      if (m.type === 'block:set') this.scene3d.addBlock(m.payload);
+      if (m.type === 'block:remove') this.scene3d.removeBlock(m.payload.id);
       if (m.type === 'aoe:remove') {
         this.scene3d.clearAoE?.(m.payload.id);
         this.adapters['2d'].removeAoE?.(m.payload.id);
@@ -330,6 +348,8 @@ export default {
       // Re-apply user tool preferences onto the fresh tool instances.
       this.tools.tools.get('measure')?.setUnit?.(this.measureUnit);
       this.tools.tools.get('aoe')?.setShape?.(this.aoeShape);
+      const bt = this.tools.tools.get('build');
+      if (bt) { bt.setShape(this.buildShape); bt.setColor(this.buildColor); bt.setSize({ h: this.buildHeight }); }
       this.toolList = this.tools.list();
       this.activeTool = this.tools.active?.id;
       this.bindPointer();
@@ -337,6 +357,13 @@ export default {
     },
     setMode(m) { if (m === this.mode) return; this.mode = m; this.applyMode(); },
     activate(id) { this.tools.activate(id); this.activeTool = id; },
+
+    toggleSnap() {
+      this.snapEnabled = !this.snapEnabled;
+      this.adapters['2d'].snapEnabled = this.snapEnabled;
+      this.adapters['3d'].snapEnabled = this.snapEnabled;
+      this.scene2d.snapEnabled = this.snapEnabled;
+    },
 
     openAddonAction(act) {
       // Open the extensions panel and tell the addon its action was invoked.
@@ -362,6 +389,12 @@ export default {
       const t = this.tools.tools.get('aoe');
       t?.clearAll?.();
     },
+    setBuildShape(s) { this.buildShape = s; this.tools.tools.get('build')?.setShape?.(s); },
+    setBuildColor() { this.tools.tools.get('build')?.setColor?.(this.buildColor); },
+    setBuildSize() {
+      const t = this.tools.tools.get('build');
+      t?.setSize?.({ h: this.buildHeight });
+    },
 
     bindPointer() {
       const el = this.mode === '2d' ? this.$refs.stage2d : this.$refs.canvas3d;
@@ -375,9 +408,9 @@ export default {
       window.onpointerup = (e) => { if (e.button === 0) this.tools.handle('onPointerUp', world(e)); };
       el.oncontextmenu = (e) => {
         e.preventDefault();
-        // When the AoE tool is active, right-click deletes the template under
-        // the cursor. Otherwise right-click is left for camera orbit/pan.
-        if (this.activeTool === 'aoe') this.tools.handle('onContext', world(e));
+        // When the AoE or Build tool is active, right-click deletes the item
+        // under the cursor. Otherwise right-click is left for camera orbit/pan.
+        if (this.activeTool === 'aoe' || this.activeTool === 'build') this.tools.handle('onContext', world(e));
       };
     },
 
@@ -418,15 +451,26 @@ export default {
     },
 
     async onAddModel(t) {
-      // A glTF/GLB lives in 3D. Switch to 3D mode so it's actually visible,
-      // and surface any load failure instead of silently doing nothing.
+      // Guard: if the chosen file is actually an image (not a glTF/GLB), treat
+      // it as a flat image token instead of feeding it to the glTF loader
+      // (which would fail trying to JSON-parse a PNG).
+      const url = (t.url || '').toLowerCase().split('?')[0];
+      const isImage = /\.(png|jpe?g|gif|webp|bmp|svg)$/.test(url);
+      if (isImage) {
+        this._notify('That looks like an image — added as a flat token. Use a .glb/.gltf file for a 3D model.');
+        await this.onAddToken({ ...t, url: t.url });
+        return;
+      }
+      const isModel = /\.(glb|gltf)$/.test(url);
+      if (url && !isModel) {
+        this._notify('Unrecognised model file — expected .glb or .gltf.');
+      }
       this.scene3d.onModelError = (data, err) => {
         this._notify(`Model failed to load: ${err?.message || 'check the URL is a direct .glb/.gltf link'}`);
       };
       this.setMode('3d');
       try {
         await this.scene3d.upsertToken({ ...t, kind: 'model' });
-        // Stand-in marker in the 2D scene so the token exists in both views.
         await this.scene2d.upsertToken({ ...t, x: t.x || 70, y: t.y || 70, size: 1, color: '#4a90d9' });
         this.sync?.send({ type: 'token:upsert', payload: t });
       } catch (err) {
@@ -538,6 +582,9 @@ function makeAddonTool(addon, def, manager) {
 .tool-options button.danger:hover { color: #fff; background: #e74c3c; border-color: #e74c3c; }
 .tool-options .opt-sep { width: 1px; height: 18px; background: var(--g-border, #2d3748); margin: 0 2px; }
 .tool-options .opt-hint { font-size: 10px; color: var(--g-text-dim, #8b949e); font-style: italic; }
+.build-color { width: 28px; height: 22px; border: none; background: none; vertical-align: middle; cursor: pointer; padding: 0; }
+.build-range { width: 70px; vertical-align: middle; margin: 0 4px; }
+.build-palette { flex-wrap: wrap; max-width: 92vw; }
 
 /* Transient toast */
 .measure-label {

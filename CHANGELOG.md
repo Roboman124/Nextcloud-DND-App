@@ -4,6 +4,40 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.5.0] - 2026-06-01
+
+### Added
+- **Map building in 3D.** New Build tool: place box / cylinder / sphere / cone /
+  ramp primitives to construct maps, with a colour and height palette.
+  Left-click places, right-click deletes; placements sync to the room and are
+  saved with the scene.
+- **Addons persist server-side.** Installed addons are stored per user
+  (grimoire_addons table) and reload automatically — they no longer vanish on
+  refresh and follow your account across devices.
+- **Addon store.** A Store tab in Extensions lists the community catalog
+  (served from /api/addons/store) with one-click install.
+- Free-movement vs snap toggle (from 0.4.7) now also governs placed blocks.
+
+### Notes
+- Environment/terrain upload is intentionally deferred to a focused follow-up.
+
+## [0.4.7] - 2026-06-01
+
+### Fixed
+- **Addons finally run** — served same-origin through a new addon proxy
+  (AddonProxyController) with a per-response relaxed CSP, instead of fighting
+  Nextcloud's strict nonce CSP via blob/srcdoc (which the browser kept blocking).
+  The proxy fetches the third-party addon files server-side and rewrites their
+  relative URLs (and the SDK import) to stay proxied. Hosts are allowlisted.
+- **Measurement tool now measures vertical distance too.** In 3D it was reading
+  the height axis (≈0) instead of depth, so only horizontal movement counted.
+- **Images added via the model picker no longer error** — a PNG/JPG is now
+  placed as a flat token instead of being fed to the glTF loader.
+
+### Added
+- **Free-movement toggle** (🧲/✥ in the toolbar): switch between snap-to-grid
+  and free token placement, in both 2D and 3D.
+
 ## [0.4.6] - 2026-06-01
 
 ### Fixed

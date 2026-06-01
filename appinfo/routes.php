@@ -36,6 +36,15 @@ return [
         // User search for the invite picker (any logged-in user; not admin-only).
         ['name' => 'user#search', 'url' => '/api/users/search', 'verb' => 'GET'],
 
+        // Same-origin proxy so third-party addon UIs run under a CSP we control.
+        ['name' => 'addonProxy#proxy', 'url' => '/addon-proxy', 'verb' => 'GET'],
+
+        // Installed-addon persistence + store catalog.
+        ['name' => 'addon#index', 'url' => '/api/addons', 'verb' => 'GET'],
+        ['name' => 'addon#install', 'url' => '/api/addons', 'verb' => 'POST'],
+        ['name' => 'addon#uninstall', 'url' => '/api/addons/{id}', 'verb' => 'DELETE'],
+        ['name' => 'addon#store', 'url' => '/api/addons/store', 'verb' => 'GET'],
+
         // Live room: issue a short-lived token for the WS relay; poll fallback.
         ['name' => 'room#token', 'url' => '/api/scenes/{id}/room-token', 'verb' => 'POST'],
         ['name' => 'room#poll', 'url' => '/api/room/poll', 'verb' => 'GET'],

@@ -50,6 +50,7 @@ export class Scene3D {
     this.gltfLoader = GLTFLoader ? new GLTFLoader() : null;
     this.tokens = new Map(); // id -> { mesh, data }
     this.aoeShapes = new Map();
+    this.blocks = new Map();  // id -> { mesh, body?, data } — map-building primitives
 
     this._buildLights();
     this._buildGround();
@@ -201,6 +202,69 @@ export class Scene3D {
   clearAoE(id) {
     const m = this.aoeShapes.get(id);
     if (m) { this.scene.remove(m); this.aoeShapes.delete(id); }
+  }
+
+  /**
+   * Add or update a map-building block (primitive geometry used to build maps:
+   * walls, floors, pillars, ramps). data = {id, shape, x, y, z, w, h, d,
+   * color, rotation}. Shapes: 'box' | 'cylinder' | 'sphere' | 'cone' | 'ramp'.
+   */
+  addBlock(data) {
+    const { THREE } = this;
+    let entry = this.blocks.get(data.id);
+    const w = data.w ?? 1, h = data.h ?? 1, d = data.d ?? 1;
+    if (!entry) {
+      let geo;
+      switch (data.shape) {
+        case 'cylinder': geo = new THREE.CylinderGeometry(w / 2, w / 2, h, 24); break;
+        case 'sphere':   geo = new THREE.SphereGeometry(w / 2, 24, 16); break;
+        case 'cone':     geo = new THREE.ConeGeometry(w / 2, h, 24); break;
+        case 'ramp': {
+          // A right-triangular prism: a box sheared into a ramp.
+          geo = new THREE.BoxGeometry(w, h, d);
+          const pos = geo.attributes.position;
+          for (let i = 0; i < pos.count; i++) {
+            // Pull the top face's front edge down to make a slope.
+            if (pos.getY(i) > 0 && pos.getZ(i) > 0) pos.setY(i, -h / 2);
+          }
+          geo.computeVertexNormals();
+          break;
+        }
+        case 'box':
+        default: geo = new THREE.BoxGeometry(w, h, d); break;
+      }
+      const mat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(data.color || '#6b5d4f'), roughness: 0.85, metalness: 0.05,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      mesh.userData.blockId = data.id;
+      this.scene.add(mesh);
+      entry = { mesh, data };
+      this.blocks.set(data.id, entry);
+    }
+    const m = entry.mesh;
+    m.position.set(data.x || 0, (data.y ?? h / 2), data.z || 0);
+    m.rotation.y = data.rotation || 0;
+    if (entry.mesh.material && data.color) entry.mesh.material.color.set(data.color);
+    entry.data = data;
+    return entry;
+  }
+
+  removeBlock(id) {
+    const e = this.blocks.get(id);
+    if (e) { this.scene.remove(e.mesh); this.blocks.delete(id); }
+  }
+
+  /** Raycast ndc -> {blockId} | {groundPoint} for the build tool. */
+  pickBuild(ndc, raycaster) {
+    raycaster.setFromCamera(ndc, this.camera);
+    const meshes = [...this.blocks.values()].map((b) => b.mesh);
+    const hit = raycaster.intersectObjects(meshes, false)[0];
+    if (hit) {
+      for (const [id, b] of this.blocks) if (b.mesh === hit.object) return { blockId: id, point: hit.point, normal: hit.face?.normal };
+    }
+    return null;
   }
 
   resize(w, h) {
