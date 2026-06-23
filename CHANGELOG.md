@@ -4,6 +4,51 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.7.0] - 2026-06-23
+
+### Added
+- **Token health system.** DM-controlled HP bars on every token (2D bar + 3D
+  billboard). GM double-clicks a token to edit HP; quick ±1/±5 buttons.
+  Synced + persisted; GM-only server-side.
+- **Measure modes.** Transient ruler, permanent rulers (synced/persisted,
+  right-click to delete), and movement mode (drag a token with a live ruler).
+  Four measurement types: euclidean, chessboard, alternating-diagonal,
+  manhattan. Per-scene ft/square scale.
+- **Grid controls.** Square / hex-pointy / hex-flat grids, line style
+  (solid/dashed/dotted), colour, opacity, width, per-scene scale. Grid
+  settings popover (⊞ in the toolbar, GM only).
+- **Player permissions.** Per-layer create/update/delete toggles for
+  maps/tokens/drawings/fog, plus owner-only tokens. Enforced server-side on
+  the room relay; GM bypasses. Permissions panel (🔒, GM only).
+- **Fog shapes & preview.** Rect/circle/polygon fog modes (plus
+  brush/eraser), cut/uncut toggle, fog preview (GM sees player view),
+  configurable fog colour.
+- **Drawing modes.** Pen, marker (closed freehand), line, rect, ellipse,
+  triangle, hexagon, polygon (click-to-add, double-click to close), text.
+  Separate stroke + fill colour pickers and width slider. Synced + persisted.
+- **Rich text on canvas.** In-place contentEditable editor (bold/italic/
+  lists/headings/emoji) replacing the prompt() dialog; HTML overlay that
+  tracks pan/zoom.
+- **Multiple maps per scene.** Add maps without replacing (multi-floor /
+  side-by-side), lock/unlock + scale each map for grid alignment. Synced +
+  persisted.
+- **2D dice viewport.** A self-contained 3D physics dice tray in a corner
+  canvas in 2D mode, so players roll and see the result without leaving the
+  battlemap. Rolls broadcast to the room.
+- **Signed room tokens.** HMAC-signed short-lived tokens; the relay verifies
+  signature + expiry against a shared secret. Live multiplayer no longer
+  needs DEV_TRUST.
+- **Nextcloud 34 support.** Dependency max-version bumped to 34.
+- **Asset library.** AssetController browses Nextcloud Files (folders,
+  thumbnails, direct file serving) with a BrowseList picker.
+- **Addon store verification.** Catalog entries validated server-side;
+  verified badge in the UI; warns on non-catalog installs.
+- **Dice calibration.** d8/d12/d20 canonical face maps (opposites sum to
+  max+1); d10 rebuilt as a true pentagonal trapezohedron.
+- **App Store-ready metadata.** info.xml now includes website, repository,
+  documentation links, and uses the SPDX licence identifier
+  (AGPL-3.0-or-later).
+
 ## [0.6.1] - 2026-06-23
 
 ### Added
