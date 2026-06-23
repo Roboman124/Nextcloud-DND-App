@@ -36,6 +36,7 @@
         <li v-for="p in store" :key="p.manifestUrl" class="store-item">
           <div class="store-meta">
             <strong>{{ p.name }}</strong> <span class="dim">by {{ p.author }}</span>
+            <span v-if="p.verified" class="verified" title="Verified against the catalog schema">✓</span>
             <p class="desc">{{ p.description }}</p>
             <p v-if="p.permissions" class="perms">needs: {{ p.permissions.join(', ') }}</p>
           </div>
@@ -70,6 +71,7 @@ export default {
       url: '', busy: false, status: null,
       installed: [],          // [{id, name, version, manifestUrl}]
       store: [], storeStatus: null, storeLoaded: false,
+      _confirmedUnverified: false,
     };
   },
   methods: {
@@ -109,6 +111,16 @@ export default {
     async _doInstall(url) {
       this.busy = true;
       this.status = null;
+      // Warn on manual installs that aren't in the verified catalog: the
+      // store validates entries; a pasted URL bypasses that check.
+      const fromStore = this.store.some((p) => p.manifestUrl === url);
+      if (!fromStore && !this._confirmedUnverified) {
+        this.status = { ok: false, msg: 'This addon is not in the verified catalog. Only install addons you trust. Click Add again to proceed.' };
+        this._confirmedUnverified = true;
+        this.busy = false;
+        return;
+      }
+      this._confirmedUnverified = false;
       try {
         let parsed;
         try { parsed = new URL(url); } catch { throw new Error('That is not a valid URL.'); }
@@ -206,6 +218,7 @@ li em { color: #c9a227; font-size: 11px; }
 .store-meta .dim { color: #8a7d63; font-size: 11px; }
 .store-meta .desc { margin: 4px 0 2px; font-size: 12px; color: #cbbfa3; }
 .store-meta .perms { margin: 0; font-size: 10px; color: #8a7d63; font-style: italic; }
+.verified { color: #9ed8a8; font-weight: 700; margin-left: 4px; font-size: 12px; }
 .mount { flex: 1; min-height: 200px; margin-top: 10px; border-radius: 10px; overflow: hidden; }
 .status { font-size: 12px; margin: 4px 0; padding: 6px 8px; border-radius: 6px; }
 .status.ok { color: #9ed8a8; background: rgba(40,90,50,.4); }

@@ -69,6 +69,10 @@ export class Scene2DAdapter {
     this.onMeasure?.(null);
   }
 
+  addMeasurement(m) { this.scene.addMeasurement?.(m); }
+  removeMeasurement(id) { this.scene.removeMeasurement?.(id); }
+  clearMeasurements() { this.scene.clearMeasurements?.(); }
+
   setAoE(id, t) {
     const Konva = this.scene.Konva, layer = this.scene.getLayer('aoe');
     const px = t.x, py = t.z ?? t.y, r = t.radius * this.gridSize;
@@ -136,6 +140,47 @@ export class Scene2DAdapter {
     for (const e of this.scene.tokens.values()) e.group.draggable(on);
   }
   highlightToken() { /* could add a selection ring */ }
+
+  /** Begin a fog brush stroke. tool = 'brush' | 'eraser'. GM-only. */
+  beginFogStroke(w, tool) {
+    this._fogTool = tool;
+    this._fogPoints = [w.x, w.y];
+    // Live preview line on the fog layer.
+    const Konva = this.scene.Konva;
+    const layer = this.scene.getLayer('fog');
+    this._fogPreview = new Konva.Line({
+      points: this._fogPoints,
+      stroke: tool === 'eraser' ? '#1a1a1a' : '#0a0a0a',
+      strokeWidth: 36,
+      lineCap: 'round', lineJoin: 'round',
+      globalCompositeOperation: tool === 'eraser' ? 'destination-out' : 'source-over',
+      listening: false,
+    });
+    layer.add(this._fogPreview);
+    layer.batchDraw();
+  }
+  extendFogStroke(w) {
+    if (!this._fogPreview) return;
+    this._fogPoints.push(w.x, w.y);
+    this._fogPreview.points(this._fogPoints);
+    this.scene.getLayer('fog').batchDraw();
+  }
+  endFogStroke() {
+    if (!this._fogPreview) return null;
+    const stroke = {
+      tool: this._fogTool,
+      points: this._fogPoints.slice(),
+      color: '#0a0a0a',
+      radius: 36,
+    };
+    // Commit to the scene's recorded strokes and emit. The preview node
+    // becomes the committed node (we keep it).
+    this.scene.fogStrokes.push(stroke);
+    this._fogPreview = null;
+    this._fogPoints = null;
+    this._fogTool = null;
+    return stroke;
+  }
 }
 
 export class Scene3DAdapter {
@@ -209,6 +254,10 @@ export class Scene3DAdapter {
     if (this._measure) { this.scene.scene.remove(this._measure); this._measure = null; }
     this.onMeasure?.(null);
   }
+
+  addMeasurement(m) { this.scene.addMeasurement?.(m); }
+  removeMeasurement(id) { this.scene.clearMeasurement?.(id); }
+  clearMeasurements() { for (const id of [...(this.scene.measurements?.keys() || [])]) this.scene.clearMeasurement?.(id); }
 
   setAoE(id, t) { this.scene.setAoE(id, t); }
   removeAoE(id) { this.scene.clearAoE?.(id); }

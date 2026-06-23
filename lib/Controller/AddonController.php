@@ -98,6 +98,9 @@ class AddonController extends OCSController {
 
     /**
      * GET /api/addons/store — the bundled community catalog of addons.
+     * Each entry is validated against the required fields; valid entries get
+     * `verified: true`, invalid ones are filtered out (with a warning logged)
+     * so the store never offers a broken manifest reference.
      */
     #[NoAdminRequired]
     public function store(): JSONResponse {
@@ -106,6 +109,41 @@ class AddonController extends OCSController {
             return new JSONResponse(['plugins' => []]);
         }
         $data = json_decode((string) file_get_contents($path), true);
-        return new JSONResponse($data ?: ['plugins' => []]);
+        if (!is_array($data)) {
+            return new JSONResponse(['plugins' => []]);
+        }
+        $plugins = $data['plugins'] ?? [];
+        $verified = [];
+        foreach ($plugins as $p) {
+            if ($this->validateCatalogEntry($p)) {
+                $p['verified'] = true;
+                $verified[] = $p;
+            } else {
+                $this->logger->warning('Grimoire: catalog entry failed validation', ['entry' => $p]);
+            }
+        }
+        return new JSONResponse(['plugins' => $verified]);
+    }
+
+    /**
+     * Minimal server-side validation of a catalog entry mirroring the JSON
+     * schema in catalog/plugins.schema.json. Keeps the store self-checking
+     * without a schema library dependency.
+     */
+    private function validateCatalogEntry($p): bool {
+        if (!is_array($p)) return false;
+        foreach (['name', 'author', 'description', 'manifestUrl'] as $f) {
+            if (!isset($p[$f]) || !is_string($p[$f]) || $p[$f] === '') return false;
+        }
+        if (mb_strlen($p['name']) > 60 || mb_strlen($p['description']) > 280) return false;
+        if (!str_starts_with($p['manifestUrl'], 'https://')) return false;
+        $allowed = ['scene:read', 'scene:write', 'tool', 'broadcast', 'metadata', 'dice'];
+        if (isset($p['permissions'])) {
+            if (!is_array($p['permissions'])) return false;
+            foreach ($p['permissions'] as $perm) {
+                if (!in_array($perm, $allowed, true)) return false;
+            }
+        }
+        return true;
     }
 }

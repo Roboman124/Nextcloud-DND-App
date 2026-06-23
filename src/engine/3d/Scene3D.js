@@ -51,6 +51,7 @@ export class Scene3D {
     this.tokens = new Map(); // id -> { mesh, data }
     this.aoeShapes = new Map();
     this.blocks = new Map();  // id -> { mesh, body?, data } — map-building primitives
+    this.measurements = new Map(); // id -> { line, dots } permanent rulers
 
     this._buildLights();
     this._buildGround();
@@ -168,7 +169,65 @@ export class Scene3D {
       if (data.kind !== 'model' || entry.mesh.userData.loadFailed) m.scale.setScalar(s);
     }
     entry.data = data;
+    this._renderHp(entry);
     return entry;
+  }
+
+  /** Update a token's HP billboard. Emits nothing (caller syncs). */
+  updateHp(id, hp) {
+    const e = this.tokens.get(id);
+    if (!e) return;
+    e.data.hp = hp;
+    this._renderHp(e);
+  }
+
+  /**
+   * An HP billboard = a canvas-texture plane floating above the token, with a
+   * bar (green/amber/red) and a "cur/max" label. Built lazily and updated in
+   * place; hidden when maxHp is unset.
+   */
+  _renderHp(e) {
+    const { THREE } = this;
+    const hp = e.data.hp;
+    const has = hp && hp.maxHp && hp.maxHp > 0;
+    if (!has) {
+      if (e.hpBillboard) e.hpBillboard.visible = false;
+      return;
+    }
+    if (!e.hpBillboard) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256; canvas.height = 64;
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true });
+      const sprite = new THREE.Sprite(mat);
+      sprite.scale.set(2.4, 0.6, 1);
+      sprite.position.set(0, 2.4, 0);
+      e.mesh.add(sprite);
+      e.hpBillboard = sprite;
+      e.hpCanvas = canvas;
+      e.hpTex = tex;
+    }
+    const cur = Math.max(0, Math.min(hp.current ?? 0, hp.maxHp));
+    const frac = hp.maxHp > 0 ? cur / hp.maxHp : 0;
+    const color = frac > 0.5 ? '#3fb950' : frac > 0.2 ? '#e0c068' : '#e74c3c';
+    const ctx = e.hpCanvas.getContext('2d');
+    ctx.clearRect(0, 0, 256, 64);
+    // Track
+    ctx.fillStyle = '#3a0d0d';
+    ctx.fillRect(8, 30, 240, 20);
+    ctx.strokeStyle = '#0d0b08'; ctx.lineWidth = 2;
+    ctx.strokeRect(8, 30, 240, 20);
+    // Fill
+    ctx.fillStyle = color;
+    ctx.fillRect(8, 30, 240 * frac, 20);
+    // Label
+    ctx.fillStyle = '#f0e6cc';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(`${cur}/${hp.maxHp}`, 128, 40);
+    e.hpTex.needsUpdate = true;
+    e.hpBillboard.visible = true;
   }
 
   removeToken(id) {
@@ -202,6 +261,33 @@ export class Scene3D {
   clearAoE(id) {
     const m = this.aoeShapes.get(id);
     if (m) { this.scene.remove(m); this.aoeShapes.delete(id); }
+  }
+
+  /** Permanent ruler in 3D: a line + two endpoint spheres on the ground. */
+  addMeasurement(m) {
+    const { THREE } = this;
+    this.clearMeasurement(m.id);
+    const geo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(m.a.x, 0.1, m.a.z ?? m.a.y),
+      new THREE.Vector3(m.b.x, 0.1, m.b.z ?? m.b.y),
+    ]);
+    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xe0c068 }));
+    const dotA = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 8), new THREE.MeshBasicMaterial({ color: 0xe0c068 }));
+    const dotB = dotA.clone();
+    dotA.position.set(m.a.x, 0.1, m.a.z ?? m.a.y);
+    dotB.position.set(m.b.x, 0.1, m.b.z ?? m.b.y);
+    this.scene.add(line, dotA, dotB);
+    this.measurements.set(m.id, { line, dotA, dotB });
+  }
+
+  clearMeasurement(id) {
+    const m = this.measurements.get(id);
+    if (!m) return;
+    this.scene.remove(m.line, m.dotA, m.dotB);
+    m.line.geometry.dispose(); m.line.material.dispose();
+    m.dotA.geometry.dispose(); m.dotA.material.dispose();
+    m.dotB.geometry.dispose(); m.dotB.material.dispose();
+    this.measurements.delete(id);
   }
 
   /**

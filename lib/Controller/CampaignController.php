@@ -128,6 +128,63 @@ class CampaignController extends OCSController {
     }
 
     /**
+     * PUT /api/campaigns/{id}/players
+     * Body: add (uid) | remove (uid). GM-only: invite or uninvite a player.
+     * Players are stored as a JSON array on the campaign's data column.
+     */
+    #[NoAdminRequired]
+    public function players(int $id, string $add = '', string $remove = ''): JSONResponse {
+        $c = $this->ownedOr404($id);
+        if ($c instanceof JSONResponse) return $c;
+        $data = json_decode($c->getData() ?? '{}', true) ?: [];
+        $players = $data['players'] ?? [];
+        if ($add !== '') {
+            if (!in_array($add, $players, true)) $players[] = $add;
+        }
+        if ($remove !== '') {
+            $players = array_values(array_filter($players, static fn($u) => $u !== $remove));
+        }
+        $data['players'] = $players;
+        $c->setData(json_encode($data));
+        $this->mapper->update($c);
+        return new JSONResponse($this->sanitize($c));
+    }
+
+    /**
+     * PUT /api/campaigns/{id}/permissions
+     * Body: permissions (object of per-layer create/update/delete bools).
+     * GM-only. Stored on the campaign data; the room reads it via the token
+     * endpoint or campaign show and enforces it client + server side.
+     */
+    #[NoAdminRequired]
+    public function permissions(int $id, ?array $permissions = null): JSONResponse {
+        $c = $this->ownedOr404($id);
+        if ($c instanceof JSONResponse) return $c;
+        $data = json_decode($c->getData() ?? '{}', true) ?: [];
+        // Normalize: each layer is {create,update,delete} bools; default true
+        // for backward compat (players could always move tokens before).
+        $layers = ['maps', 'tokens', 'drawings', 'fog'];
+        $norm = [];
+        foreach ($layers as $layer) {
+            $incoming = $permissions[$layer] ?? null;
+            if (!is_array($incoming)) {
+                $norm[$layer] = ['create' => true, 'update' => true, 'delete' => true];
+                continue;
+            }
+            $norm[$layer] = [
+                'create' => (bool) ($incoming['create'] ?? true),
+                'update' => (bool) ($incoming['update'] ?? true),
+                'delete' => (bool) ($incoming['delete'] ?? true),
+                'ownerOnly' => (bool) ($incoming['ownerOnly'] ?? false),
+            ];
+        }
+        $data['permissions'] = $norm;
+        $c->setData(json_encode($data));
+        $this->mapper->update($c);
+        return new JSONResponse($norm);
+    }
+
+    /**
      * Return a campaign as the browser should see it: the Discord webhook URL is
      * removed from `data` and replaced with a boolean `hasWebhook` flag, so the
      * secret never crosses to the client.

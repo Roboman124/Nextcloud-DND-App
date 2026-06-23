@@ -86,8 +86,13 @@ npm run dev      # GRIMOIRE_DEV_TRUST=1 node relay.js  (accepts unsigned dev tok
 ```
 
 For production, run it with a shared secret instead:
-`GRIMOIRE_RELAY_SECRET=<secret> node relay.js`. The signing of room tokens on the
-PHP side is roadmap item #1 in `ARCHITECTURE.md`.
+`GRIMOIRE_RELAY_SECRET=<secret> node relay.js`. Room tokens are HMAC-signed on
+the PHP side (`RoomController::token`) against the same secret; set it on the
+Nextcloud side with `php occ config:app:set grimoire relay_secret --value
+<secret>` (or the `GRIMOIRE_RELAY_SECRET` env var). Signed tokens are
+short-lived (2 min) and verified by the relay without a DB hit. Without a
+secret configured, the relay still works in `GRIMOIRE_DEV_TRUST=1` mode for
+local development.
 
 ---
 

@@ -121,6 +121,19 @@ each die, recording which value sits on which normal, and hard-coding the maps
 like `d6` does. The d10 is approximated and should be rebuilt as a proper
 pentagonal trapezohedron (lathe geometry).
 
+**Calibration (done in 0.6.0):** d8/d12/d20 now use canonical face maps built by
+`calibratedFaces()`, which pairs each normal with its opposite and assigns
+`(v, max+1−v)` so opposite faces sum to max+1. The d10 is now a real
+pentagonal trapezohedron built from a lathe-style geometry
+(`buildTrapezohedronGeometry`), no longer an icosa approximation.
+
+**2D dice viewport:** In 2D mode there's no 3D scene to show the dice tumbling,
+so `DiceViewport` (`src/components/DiceViewport.vue`) renders its own
+self-contained three.js + cannon-es tray in a small corner canvas — same
+`DiceRoller` engine, just a private scene/world. Players in 2D mode get the
+physics-dice experience without leaving the battlemap; rolls broadcast to the
+room via the usual `dice:result` message.
+
 ---
 
 ## 5. Real-time sync
@@ -215,25 +228,34 @@ grimoire/
 ## 8. Roadmap (suggested order)
 
 **Built now:** project skeleton, DB layer, campaign/scene API, 2D + 3D engine,
-physics dice, the four tools, the addon host + SDK + example, sync client with
-fallback, the reference relay service, runnable demo.
+physics dice (calibrated d4–d20), pointer/grab/measure/AoE/draw/fog/build tools,
+addon host + SDK + example + verified store, sync client with signed tokens +
+polling fallback, the reference relay service, runnable demo, asset library
+backed by Nextcloud Files, player roles (GM/player), 2D dice viewport.
 
-**Next, in rough priority:**
-1. **`RoomController::token` signing** to finish live multiplayer — the relay
-   (`server/relay.js`) already exists and the client is shaped for it; the PHP
-   app just needs to mint and sign short-lived room tokens. Everything else is
-   more fun once two browsers share a table.
-2. **Fog of war** — a paintable mask layer in `Scene2D` (Owlbear's signature
-   feature) and a tool to reveal/hide.
-3. **Asset library** backed by Nextcloud Files — pick maps/tokens/models from
-   the user's own storage; this is the self-hosting payoff.
-4. **glTF model upload + placement UI** in 3D mode; thumbnail generation.
-5. **Player sharing & roles** — invite players to a campaign (GM vs player
-   permissions); right now everything is owner-scoped.
-6. **Dice calibration** for d8/d12/d20/d10 (see §4).
-7. **Drawing tools** (freehand, shapes, text) and **notes**.
-8. **Addon store** — a curated `extensions.json` and an in-app browser, plus a
-   verification process like Owlbear's.
+**Next, in rough priority (feature gaps vs Owlbear Rodeo, from the docs):**
+1. **Grid controls** — hex (vertical/horizontal) + isometric grids, line style
+   (solid/dashed/dotted), color/opacity/line-width, per-scene measurement type
+   (chessboard / alternating-diagonal / euclidean / manhattan), and a grid-scale
+   field. Currently Grimoire is square-only, euclidean-only, fixed 5 ft.
+2. **Fog shapes & preview** — rectangle/polygon/circle fog modes (not just
+   brush), per-shape cut/uncut so a revealed room can be re-hidden, a "fog
+   preview" toggle to see the player view, and a configurable fog color.
+3. **Drawing modes** — polygon, marker (freehand), line, triangle, hexagon;
+   fill + stroke style menus; advanced point editing; layer ordering
+   (above/below grid); trim/join of shapes.
+4. **Rich text on canvas** — replace the `prompt()` text tool with an in-place
+   editor (bold/italic/lists/headings/emoji) like Owlbear's Text tool.
+5. **Measure modes** — permanent (double-click to place) rulers and a movement
+   mode that drags a token while showing distance, plus per-scene measurement
+   type selection.
+6. **Player permissions** — per-layer create/update/delete toggles for players
+   (maps/tokens/drawings/fog), plus token ownership ("owner-only") so each
+   player can move only their own characters.
+7. **Multiple maps per scene + grid alignment** — drop several map images onto
+   one infinite canvas and a tool to align a map's grid to the scene grid.
+8. **Casting** — screen-cast the scene to remote viewers (needs streaming
+   infra; lowest priority for a self-hosted app).
 
 ---
 

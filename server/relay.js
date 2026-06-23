@@ -8,12 +8,12 @@
  *  - Durable state (token positions, the scene graph) is owned by the
  *    Nextcloud PHP app and persisted there; this relay only carries the
  *    low-latency transient stream so the table feels live.
- *  - Tokens are minted by the PHP app (RoomController, roadmap) and handed to
- *    the browser, which connects here with ?token=<roomToken>. In this
- *    reference build the token format is "<roomId>.<userId>.<sig>"; verify the
- *    signature against the same shared secret the PHP app signs with. Until
- *    RoomController lands, set GRIMOIRE_DEV_TRUST=1 to accept "<roomId>.<userId>"
- *    unsigned for local development.
+ *  - Tokens are minted by RoomController::token as
+ *    "<roomId>.<userId>.<sig>.<exp>" where sig = HMAC-SHA256(secret, payload).
+ *    Verify the signature against the same shared secret (GRIMOIRE_RELAY_SECRET
+ *    or the app config value grimoire.relay_secret). For local development
+ *    without a secret, set GRIMOIRE_DEV_TRUST=1 to accept "<roomId>.<userId>"
+ *    unsigned tokens.
  *
  * Run:  GRIMOIRE_RELAY_SECRET=changeme node server/relay.js
  * Env:  PORT (default 8787), GRIMOIRE_RELAY_SECRET, GRIMOIRE_DEV_TRUST
@@ -36,7 +36,16 @@ const DEV_TRUST = process.env.GRIMOIRE_DEV_TRUST === '1';
 /** roomId -> Set<ws> */
 const rooms = new Map();
 
-/** Constant-time HMAC check of a "<roomId>.<userId>.<sig>" token. */
+/**
+ * Verify a room token.
+ *
+ * Signed form: "<roomId>.<userId>.<sig>.<exp>"
+ *   sig = HMAC-SHA256(secret, "<roomId>.<userId>.<exp>").slice(0,32)
+ *   exp = unix seconds; rejected once it's in the past.
+ * Dev form (only when GRIMOIRE_DEV_TRUST=1): "<roomId>.<userId>" unsigned.
+ *
+ * Returns { roomId, userId } on success, or null to reject the connection.
+ */
 function verifyToken(token) {
   if (!token) return null;
   const parts = token.split('.');
@@ -44,12 +53,17 @@ function verifyToken(token) {
     const [roomId, userId] = parts;
     return { roomId, userId };
   }
-  if (parts.length !== 3) return null;
-  const [roomId, userId, sig] = parts;
+  if (parts.length !== 4) return null;
+  const [roomId, userId, expStr, sig] = parts;
+  const exp = Number(expStr);
+  if (!Number.isFinite(exp) || exp < Math.floor(Date.now() / 1000)) {
+    return null; // expired
+  }
   if (!SECRET) return null;
+  const payload = `${roomId}.${userId}.${exp}`;
   const expected = crypto
     .createHmac('sha256', SECRET)
-    .update(`${roomId}.${userId}`)
+    .update(payload)
     .digest('hex')
     .slice(0, 32);
   const a = Buffer.from(sig);

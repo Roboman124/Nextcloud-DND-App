@@ -12,6 +12,7 @@ use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\OCSController;
+use OCP\IConfig;
 use OCP\ICacheFactory;
 use OCP\IRequest;
 
@@ -41,6 +42,7 @@ use OCP\IRequest;
 class RoomController extends OCSController {
     private const TTL = 120;            // seconds a message survives in cache
     private const MAX_MESSAGES = 200;   // ring buffer cap per room
+    private const TOKEN_TTL = 120;      // seconds a signed room token is valid
 
     public function __construct(
         IRequest $request,
@@ -48,6 +50,7 @@ class RoomController extends OCSController {
         private CampaignMapper $campaignMapper,
         private DiscordService $discord,
         private ICacheFactory $cacheFactory,
+        private IConfig $config,
         private ?string $userId,
     ) {
         parent::__construct(Application::APP_ID, $request);
@@ -55,8 +58,10 @@ class RoomController extends OCSController {
 
     /**
      * POST /api/scenes/{id}/room-token
-     * Verifies the caller can access the scene, returns a room token. relayUrl
-     * is empty unless a WS relay is configured, so the client polls by default.
+     * Verifies the caller can access the scene, returns a short-lived,
+     * HMAC-signed room token the WebSocket relay can verify without a DB hit.
+     * relayUrl is empty unless a WS relay is configured, so the client polls
+     * by default; when a relay is configured, token() is the trust anchor.
      */
     #[NoAdminRequired]
     public function token(int $id): JSONResponse {
@@ -65,12 +70,14 @@ class RoomController extends OCSController {
             return $scene;
         }
         $roomId = 'scene-' . $id;
-        // The token isn't a security boundary in poll mode (every call is
-        // already authenticated by Nextcloud's session + access check); it just
-        // identifies the room and user to the relay if one is used.
-        $token = $roomId . '.' . ($this->userId ?? 'anon');
-
+        $user = $this->userId ?? 'anon';
         $relayUrl = getenv('GRIMOIRE_RELAY_URL') ?: '';
+
+        // Mint a signed, short-lived token: "<roomId>.<userId>.<sig>.<exp>".
+        // The relay verifies the signature against the same shared secret
+        // (GRIMOIRE_RELAY_SECRET) and rejects expired tokens, so it never needs
+        // to talk to the DB to authenticate a connection.
+        $token = $this->mintRoomToken($roomId, $user);
 
         // Probe the distributed cache: poll-mode multiplayer relies on it, and a
         // local-only (non-distributed) cache silently drops cross-request data.
@@ -81,7 +88,32 @@ class RoomController extends OCSController {
             'roomId' => $roomId,
             'relayUrl' => $relayUrl, // empty -> SyncClient uses long-poll
             'syncBackend' => $cacheOk ? 'cache' : 'none',
+            'role' => $this->roleFor($scene->getCampaignId()),
+            'permissions' => $this->permissionsFor($scene->getCampaignId()),
         ]);
+    }
+
+    /**
+     * Build "<roomId>.<userId>.<sig>.<exp>" where sig = HMAC-SHA256(secret,
+     * "<roomId>.<userId>.<exp>") truncated to 32 hex chars. TTL is 2 minutes
+     * so a token is only good for the brief window after the browser requests
+     * it. If no secret is configured, falls back to the unsigned dev form so
+     * the relay's GRIMOIRE_DEV_TRUST=1 mode still works for local dev.
+     */
+    private function mintRoomToken(string $roomId, string $user): string {
+        $secret = (string) $this->config->getAppValue(Application::APP_ID, 'relay_secret', '');
+        if ($secret === '') {
+            $secret = getenv('GRIMOIRE_RELAY_SECRET') ?: '';
+        }
+        $exp = time() + self::TOKEN_TTL;
+        if ($secret === '') {
+            // No secret configured: return the legacy unsigned dev form so a
+            // relay running in DEV_TRUST mode still accepts it.
+            return $roomId . '.' . $user;
+        }
+        $payload = $roomId . '.' . $user . '.' . $exp;
+        $sig = hash_hmac('sha256', $payload, $secret, false);
+        return $payload . '.' . substr($sig, 0, 32);
     }
 
     /**
@@ -93,6 +125,35 @@ class RoomController extends OCSController {
         $scene = $this->accessibleSceneOr404($sceneId);
         if ($scene instanceof JSONResponse) {
             return $scene;
+        }
+
+        // Fog of war is GM-only: a player must not be able to reveal/hide
+        // terrain. Block any fog:* message from a non-GM.
+        if (str_starts_with($type, 'fog:') && !$this->isGm($scene->getCampaignId())) {
+            return new JSONResponse(['error' => 'Fog is GM-only'], Http::STATUS_FORBIDDEN);
+        }
+        // HP edits are GM-only: players see bars but can't change them.
+        if ($type === 'token:hp' && !$this->isGm($scene->getCampaignId())) {
+            return new JSONResponse(['error' => 'HP is GM-only'], Http::STATUS_FORBIDDEN);
+        }
+
+        // Per-layer player permissions: a non-GM is blocked from create/update/
+        // delete on each layer unless the campaign allows it. GMs bypass.
+        if (!$this->isGm($scene->getCampaignId())) {
+            $layerAction = $this->layerActionFor($type);
+            if ($layerAction !== null) {
+                [$layer, $action] = $layerAction;
+                $perms = $this->permissionsFor($scene->getCampaignId());
+                $allowed = $perms[$layer][$action] ?? true;
+                // ownerOnly on tokens: a player may only update/delete their own.
+                if ($allowed && ($perms[$layer]['ownerOnly'] ?? false) && $action !== 'create') {
+                    $tokenOwner = $this->tokenOwner($scene->getCampaignId(), $payload);
+                    $allowed = $tokenOwner === null || $tokenOwner === $this->userId;
+                }
+                if (!$allowed) {
+                    return new JSONResponse(['error' => "Permission denied: {$layer}.{$action}"], Http::STATUS_FORBIDDEN);
+                }
+            }
         }
 
         $cache = $this->cacheFactory->createDistributed(Application::APP_ID . '-room-');
@@ -219,5 +280,79 @@ class RoomController extends OCSController {
         $data = json_decode($campaign->getData() ?? '{}', true) ?: [];
         $players = $data['players'] ?? [];
         return in_array($this->userId, $players, true);
+    }
+
+    /** 'gm' for the campaign owner, 'player' for an invited member, '' otherwise. */
+    private function roleFor(int $campaignId): string {
+        try {
+            $campaign = $this->campaignMapper->find($campaignId);
+        } catch (DoesNotExistException) {
+            return '';
+        }
+        if ($campaign->getOwner() === $this->userId) return 'gm';
+        $data = json_decode($campaign->getData() ?? '{}', true) ?: [];
+        if (in_array($this->userId, $data['players'] ?? [], true)) return 'player';
+        return '';
+    }
+
+    private function isGm(int $campaignId): bool {
+        return $this->roleFor($campaignId) === 'gm';
+    }
+
+    /** The campaign's per-layer player permission flags (GM sees all). */
+    private function permissionsFor(int $campaignId): array {
+        try {
+            $campaign = $this->campaignMapper->find($campaignId);
+        } catch (DoesNotExistException) {
+            return [];
+        }
+        $data = json_decode($campaign->getData() ?? '{}', true) ?: [];
+        $perms = $data['permissions'] ?? [];
+        // Default: everything allowed (backward compat).
+        $layers = ['maps', 'tokens', 'drawings', 'fog'];
+        $out = [];
+        foreach ($layers as $layer) {
+            $out[$layer] = array_merge(
+                ['create' => true, 'update' => true, 'delete' => true, 'ownerOnly' => false],
+                $perms[$layer] ?? []
+            );
+        }
+        return $out;
+    }
+
+    /** Map a sync message type to [layer, action] for permission checks. */
+    private function layerActionFor(string $type): ?array {
+        return match (true) {
+            str_starts_with($type, 'token:upsert') => ['tokens', 'create'],
+            str_starts_with($type, 'token:move') => ['tokens', 'update'],
+            str_starts_with($type, 'token:remove') => ['tokens', 'delete'],
+            str_starts_with($type, 'map:set') => ['maps', 'create'],
+            str_starts_with($type, 'draw:') => ['drawings', 'create'],
+            str_starts_with($type, 'fog:') => ['fog', 'create'],
+            str_starts_with($type, 'aoe:') => ['drawings', 'create'],
+            str_starts_with($type, 'block:') => ['maps', 'create'],
+            str_starts_with($type, 'measure:') => ['drawings', 'create'],
+            default => null,
+        };
+    }
+
+    /** Resolve the owner of a token referenced in a payload, or null. */
+    private function tokenOwner(int $campaignId, $payload): ?string {
+        if (!is_array($payload)) return null;
+        // The token's owner field is set client-side when the token is created;
+        // for move/delete the payload carries only id, so we look up the scene.
+        // This is best-effort: if we can't resolve it, allow (null).
+        $id = $payload['id'] ?? null;
+        if (!$id) return null;
+        try {
+            $scene = $this->sceneMapper->find((int) $id);
+        } catch (\Throwable) {
+            return $payload['owner'] ?? null;
+        }
+        $data = json_decode($scene->getData() ?? '{}', true) ?: [];
+        foreach ($data['tokens'] ?? [] as $t) {
+            if (($t['id'] ?? null) === $id) return $t['owner'] ?? null;
+        }
+        return $payload['owner'] ?? null;
     }
 }

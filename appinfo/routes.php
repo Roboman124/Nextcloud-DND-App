@@ -33,6 +33,12 @@ return [
         // Discord webhook config (events on/off + write-only webhook URL).
         ['name' => 'campaign#discord', 'url' => '/api/campaigns/{id}/discord', 'verb' => 'PUT'],
 
+        // Player roster management (invite/remove players — GM only).
+        ['name' => 'campaign#players', 'url' => '/api/campaigns/{id}/players', 'verb' => 'PUT'],
+
+        // Player permissions (per-layer create/update/delete toggles — GM only).
+        ['name' => 'campaign#permissions', 'url' => '/api/campaigns/{id}/permissions', 'verb' => 'PUT'],
+
         // User search for the invite picker (any logged-in user; not admin-only).
         ['name' => 'user#search', 'url' => '/api/users/search', 'verb' => 'GET'],
 
@@ -44,6 +50,11 @@ return [
         ['name' => 'addon#install', 'url' => '/api/addons', 'verb' => 'POST'],
         ['name' => 'addon#uninstall', 'url' => '/api/addons/{id}', 'verb' => 'DELETE'],
         ['name' => 'addon#store', 'url' => '/api/addons/store', 'verb' => 'GET'],
+
+        // Asset library: browse Nextcloud Files for maps/tokens/models.
+        ['name' => 'asset#index', 'url' => '/api/assets', 'verb' => 'GET'],
+        ['name' => 'asset#file', 'url' => '/api/assets/file', 'verb' => 'GET'],
+        ['name' => 'asset#thumbnail', 'url' => '/api/assets/thumbnail', 'verb' => 'GET'],
 
         // Live room: issue a short-lived token for the WS relay; poll fallback.
         ['name' => 'room#token', 'url' => '/api/scenes/{id}/room-token', 'verb' => 'POST'],

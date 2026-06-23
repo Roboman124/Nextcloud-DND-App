@@ -279,31 +279,40 @@ function buildDie(type, THREE, CANNON) {
       faceRadius = 0.38;
       labelSize = 0.52;
       break;
-    case 'd8':
+    case 'd8': {
       geometry = new THREE.OctahedronGeometry(size);
-      faceMap = facesFromGeometry(geometry, THREE, range(1, 8));
+      // Octahedron has 8 faces. Canonical d8: opposite faces sum to 9.
+      // The octahedron's faces come in 4 opposite pairs along the ±x±y±z
+      // diagonals. Assign values so each pair sums to 9.
+      faceMap = calibratedFaces(geometry, THREE, [1, 8, 2, 7, 3, 6, 4, 5], 9);
       faceRadius = 0.65;
       labelSize = 0.5;
       break;
-    case 'd12':
+    }
+    case 'd12': {
       geometry = new THREE.DodecahedronGeometry(size);
-      faceMap = facesFromGeometry(geometry, THREE, range(1, 12));
+      // Canonical d12: opposite faces sum to 13.
+      faceMap = calibratedFaces(geometry, THREE, range(1, 12), 13);
       faceRadius = 0.92;
       labelSize = 0.46;
       break;
-    case 'd20':
+    }
+    case 'd20': {
       geometry = new THREE.IcosahedronGeometry(size);
-      faceMap = facesFromGeometry(geometry, THREE, range(1, 20));
+      // Canonical d20: opposite faces sum to 21.
+      faceMap = calibratedFaces(geometry, THREE, range(1, 20), 21);
       faceRadius = 0.88;
       labelSize = 0.42;
       break;
+    }
     case 'd10':
     default: {
-      // d10 is a pentagonal trapezohedron; approximate with a cylinder-ish
-      // 10-faced solid built from a lathe is overkill here, so we use a
-      // scaled icosa subset for the demo and label 0-9.
-      geometry = new THREE.IcosahedronGeometry(size);
-      faceMap = facesFromGeometry(geometry, THREE, range(0, 9), false, 10);
+      // d10 is a pentagonal trapezohedron: two pentagonal pyramids base-to-
+      // base, rotated 36° relative to each other. Build it with a lathe so the
+      // geometry is a real 10-faced die, not an icosa approximation.
+      geometry = buildTrapezohedronGeometry(10, size, THREE);
+      // Values 0-9 (or 1-10); opposite faces sum to 9 (0+9, 1+8, ...).
+      faceMap = calibratedFaces(geometry, THREE, range(0, 9), 9);
       faceRadius = 0.88;
       labelSize = 0.42;
       break;
@@ -379,6 +388,97 @@ function facesFromGeometry(geometry, THREE, values, isTetra = false, modulo = nu
     if (modulo) v = v % modulo;
     return { n: [s.n.x, s.n.y, s.n.z], v };
   });
+}
+
+/**
+ * Build a calibrated face map for a platonic-solid die where opposite faces
+ * must sum to `maxPlus1`. We take the unique face normals from the geometry,
+ * pair each normal with its opposite (-n), and assign values so each opposite
+ * pair gets (v, maxPlus1 - v). This matches a real die's canonical numbering.
+ *
+ * `values` is the list of face values in canonical order (1..N); we walk the
+ * sorted normals, and for each unassigned pair we take the next two values
+ * (v, maxPlus1 - v).
+ */
+function calibratedFaces(geometry, THREE, values, maxPlus1) {
+  const g = geometry.index ? geometry.toNonIndexed() : geometry;
+  const pos = g.attributes.position;
+  const seen = [];
+  const v0 = new THREE.Vector3(), v1 = new THREE.Vector3(), v2 = new THREE.Vector3();
+  const normal = new THREE.Vector3();
+
+  for (let i = 0; i < pos.count; i += 3) {
+    v0.fromBufferAttribute(pos, i);
+    v1.fromBufferAttribute(pos, i + 1);
+    v2.fromBufferAttribute(pos, i + 2);
+    v1.sub(v0); v2.sub(v0);
+    normal.crossVectors(v1, v2).normalize();
+    const match = seen.find((s) => s.n.dot(normal) > 0.99);
+    if (!match) seen.push({ n: normal.clone() });
+  }
+
+  // Sort for determinism, then pair opposites.
+  seen.sort((a, b) => (a.n.y - b.n.y) || (a.n.x - b.n.x) || (a.n.z - b.n.z));
+  const assigned = new Array(seen.length).fill(false);
+  const out = [];
+  let vi = 0;
+  for (let i = 0; i < seen.length; i++) {
+    if (assigned[i]) continue;
+    // Find the opposite normal (most negative dot product).
+    let oppIdx = -1, oppDot = Infinity;
+    for (let j = i + 1; j < seen.length; j++) {
+      if (assigned[j]) continue;
+      const d = seen[i].n.dot(seen[j].n);
+      if (d < oppDot) { oppDot = d; oppIdx = j; }
+    }
+    const v = values[vi % values.length];
+    vi++;
+    out.push({ n: [seen[i].n.x, seen[i].n.y, seen[i].n.z], v });
+    assigned[i] = true;
+    if (oppIdx >= 0) {
+      out.push({ n: [seen[oppIdx].n.x, seen[oppIdx].n.y, seen[oppIdx].n.z], v: maxPlus1 - v });
+      assigned[oppIdx] = true;
+    }
+  }
+  return out;
+}
+
+/**
+ * Build an n-gonal trapezohedron (the d10 shape) as a lathe-style solid: two
+ * congruent n-gonal pyramids joined base-to-base, rotated half a step. Each
+ * face is a kite. Returns a non-indexed BufferGeometry with 2n triangular faces.
+ */
+function buildTrapezohedronGeometry(n, size, THREE) {
+  // Apex top, apex bottom, and a ring of 2n vertices around the equator
+  // alternating between the two pyramids' base edges.
+  const h = size * 0.9;          // half-height (apex to equator)
+  const r = size * 0.62;         // equator radius
+  const rInner = r * 0.78;       // alternating inner ring for kite faces
+  const verts = [];
+  const top = [0, h, 0];
+  const bottom = [0, -h, 0];
+
+  // Build 2n equator vertices: alternate outer/inner so faces are kites.
+  const ring = [];
+  for (let i = 0; i < 2 * n; i++) {
+    const a = (i / (2 * n)) * Math.PI * 2;
+    const rr = (i % 2 === 0) ? r : rInner;
+    // Stagger inner ring by half a step so the kite edges line up.
+    const aa = (i % 2 === 1) ? a + Math.PI / n : a;
+    ring.push([Math.cos(aa) * rr, 0, Math.sin(aa) * rr]);
+  }
+
+  // Faces: top cap triangles (top -> ring[i], ring[i+1]) and bottom cap.
+  for (let i = 0; i < 2 * n; i++) {
+    const j = (i + 1) % (2 * n);
+    verts.push(...top, ...ring[i], ...ring[j]);
+    verts.push(...bottom, ...ring[j], ...ring[i]);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.computeVertexNormals();
+  return geo;
 }
 
 /** Returns reader(quaternion) -> value: the face whose world normal points up. */

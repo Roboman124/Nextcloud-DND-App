@@ -16,9 +16,12 @@
 
     <!-- MAP tab -->
     <div v-if="activeTab === 'map'" class="tab-body">
-      <p class="hint">Pick a map image from your Nextcloud Files to set as the battle map.</p>
+      <p class="hint">Set the battle map, or add additional maps to the same scene (e.g. multiple floors).</p>
       <button class="pick-btn" @click="pickFile('map', IMAGE_TYPES)">
-        🗺 Pick Map Image
+        🗺 Set Map Image
+      </button>
+      <button class="pick-btn secondary" @click="pickFile('map-add', IMAGE_TYPES)">
+        ➕ Add Map (multi-floor)
       </button>
       <div v-if="recentMaps.length" class="recent">
         <p class="recent-label">Recent</p>
@@ -29,6 +32,7 @@
           </button>
         </div>
       </div>
+      <BrowseList kind="map" @pick="applyMap" />
     </div>
 
     <!-- TOKENS tab -->
@@ -49,6 +53,7 @@
           + Add Token
         </button>
       </div>
+      <BrowseList kind="token" @pick="onPickTokenImage" />
     </div>
 
     <!-- MODELS tab -->
@@ -66,13 +71,15 @@
           + Add 3D Token
         </button>
       </div>
+      <BrowseList kind="model" @pick="onPickModel" />
     </div>
   </div>
 </template>
 
 <script>
-import { generateUrl } from '@nextcloud/router';
+import { generateUrl } from '../lib/url.js';
 import { loadState } from '@nextcloud/initial-state';
+import BrowseList from './BrowseList.vue';
 
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/svg+xml'];
 // GLB/GLTF don't have standard mimetypes; pass empty to show all files.
@@ -80,7 +87,8 @@ const MODEL_TYPES = [];
 
 export default {
   name: 'AssetPicker',
-  emits: ['close', 'setMap', 'addToken', 'addModel'],
+  components: { BrowseList },
+  emits: ['close', 'setMap', 'addToken', 'addModel', 'addMap'],
   data() {
     return {
       IMAGE_TYPES,
@@ -130,6 +138,8 @@ export default {
     _applyPickedUrl(target, url, name) {
       if (target === 'map') {
         this.applyMap(url, name);
+      } else if (target === 'map-add') {
+        this.addMap(url, name);
       } else if (target === 'token-image') {
         this.tokenImageUrl = url;
         this.tokenImageName = name;
@@ -145,6 +155,14 @@ export default {
       this.recentMaps = [entry, ...this.recentMaps.filter((m) => m.url !== url)].slice(0, 6);
       try { localStorage.setItem('grimoire_recent_maps', JSON.stringify(this.recentMaps)); } catch {}
       this.$emit('setMap', url);
+    },
+
+    /** Add a second+ map to the scene (multi-floor / side-by-side). */
+    addMap(url, name) {
+      const entry = { url, name: name || url.split('/').pop() };
+      this.recentMaps = [entry, ...this.recentMaps.filter((m) => m.url !== url)].slice(0, 6);
+      try { localStorage.setItem('grimoire_recent_maps', JSON.stringify(this.recentMaps)); } catch {}
+      this.$emit('addMap', url);
     },
 
     addToken() {
@@ -176,6 +194,30 @@ export default {
       this.modelLabel = '';
       this.modelUrl = null;
       this.modelName = '';
+    },
+
+    /** A file was picked from the Nextcloud Files browser (map tab). */
+    applyMapFromFile(file) {
+      this.applyMap(file.url, file.name);
+    },
+
+    /** An image picked from the browser (tokens tab): prefill the form. */
+    onPickTokenImage(file) {
+      this.tokenImageUrl = file.url;
+      this.tokenImageName = file.name;
+      if (!this.tokenLabel.trim()) this.tokenLabel = file.name.replace(/\.[^.]+$/, '');
+    },
+
+    /** A model picked from the browser (models tab): place it immediately. */
+    onPickModel(file) {
+      const id = 'model_' + Date.now();
+      this.$emit('addModel', {
+        id,
+        label: file.name.replace(/\.[^.]+$/, ''),
+        url: file.url,
+        kind: 'model',
+        x: 0, z: 0, scale: 1,
+      });
     },
   },
 };

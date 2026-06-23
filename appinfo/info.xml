@@ -22,7 +22,7 @@ Features
 - Real-time multiplayer rooms
 - Addon/extension system so the table can be extended over time
     ]]></description>
-    <version>0.5.3</version>
+    <version>0.6.0</version>
     <licence>agpl</licence>
     <author>Roboman124</author>
     <namespace>Grimoire</namespace>
@@ -30,7 +30,7 @@ Features
     <category>multimedia</category>
     <bugs>https://github.com/Roboman124/Nextcloud-DND-App/issues</bugs>
     <dependencies>
-        <nextcloud min-version="28" max-version="33"/>
+        <nextcloud min-version="28" max-version="34"/>
     </dependencies>
     <navigations>
         <navigation>

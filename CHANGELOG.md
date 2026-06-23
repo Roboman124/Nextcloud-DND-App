@@ -4,6 +4,43 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.6.1] - 2026-06-23
+
+### Added
+- **2D dice viewport.** A small embedded 3D render of the physics dice tray
+  (`DiceViewport`) now shows in 2D mode — open it from the "3D Dice" tab in the
+  corner, pick dice, and roll. The dice tumble in their own self-contained 3D
+  scene, so players in 2D mode get the physics-dice experience without leaving
+  the battlemap. Rolls broadcast to the room like any other.
+
+## [0.6.0] - 2026-06-23
+
+### Added
+- **Nextcloud 34 support.** The `nextcloud` dependency in `info.xml` now allows
+  up to 34 (was capped at 33).
+- **Signed room tokens** for the WebSocket relay. `RoomController::token` now
+  mints HMAC-signed short-lived tokens (`<roomId>.<userId>.<sig>.<exp>`), and
+  `server/relay.js` verifies them against a shared secret — live multiplayer no
+  longer needs `GRIMOIRE_DEV_TRUST=1`.
+- **Fog of war** (2D). A paintable mask layer in `Scene2D` with a Fog tool:
+  brush to hide, eraser to reveal, plus "reveal all"/"hide all". GM-only; synced
+  to the room and saved with the scene.
+- **Asset library backed by Nextcloud Files.** The asset picker now browses your
+  own Nextcloud storage (folders, thumbnails) instead of only a URL prompt.
+- **glTF upload + placement UI.** Models picked from Nextcloud Files are placed
+  in the 3D scene at the cursor; a thumbnail is generated for the asset panel.
+- **Player roles (GM vs player).** Invited players are marked `player`; the
+  owner is `gm`. GM-only actions (fog, scene delete, manage players) are gated
+  server-side and hidden in the UI for players.
+- **Dice calibration.** d8/d12/d20/d10 face maps are now hand-matched to real
+  die numbering (opposite faces sum to max+1 for d8/d12/d20; d10 rebuilt as a
+  proper pentagonal trapezohedron via lathe geometry).
+- **Drawing tools.** Freehand pen, rectangle, ellipse, and text notes on the 2D
+  canvas, with colour and stroke width. Synced and persisted.
+- **Addon store verification.** Catalog entries are checked against the schema
+  before listing; the in-app store shows a "verified" badge and warns on
+  unverified installs.
+
 ## [0.5.3] - 2026-06-01
 
 ### Fixed
