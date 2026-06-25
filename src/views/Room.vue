@@ -16,7 +16,7 @@
       <button class="topbar-btn save" :disabled="saving" @click="saveScene">
         {{ saving ? 'Saving…' : (saved ? '✓ Saved' : '💾 Save') }}
       </button>
-      <button class="topbar-btn" @click="showAddons = !showAddons">Extensions</button>
+      <button class="topbar-btn" :class="{on: showInit}" @click="showInit = !showInit">⚔ Initiative</button>
     </div>
 
     <div class="surface">
@@ -38,19 +38,12 @@
         <button class="tool" :class="{on: snapEnabled}" :title="snapEnabled ? 'Snap to grid (on)' : 'Free movement (snap off)'" @click="toggleSnap">
           {{ snapEnabled ? '🧲' : '✥' }}
         </button>
-        <template v-if="addonActions.length">
-          <div class="tool-divider" />
-          <button
-            v-for="act in addonActions" :key="act.id"
-            class="tool addon-action" :title="act.label"
-            @click="openAddonAction(act)">{{ act.icon }}</button>
-        </template>
       </div>
 
       <!-- Hint bar -->
       <div class="hint-bar">
         <span v-if="mode === '3d'">Right-click drag: orbit · Scroll: zoom · Left-click: {{ activeTool }}<span v-if="role === 'gm'"> · Double-click a token: edit HP</span></span>
-        <span v-else>Right-click drag: pan · Scroll: zoom · Left-click: {{ activeTool }} · 🎲 3D dice in the corner<span v-if="role === 'gm'"> · Double-click a token: edit HP</span></span>
+        <span v-else>Right-click drag: pan · Scroll: zoom · Left-click: {{ activeTool }}<span v-if="role === 'gm'"> · Double-click a token: edit HP</span></span>
       </div>
 
       <!-- Contextual controls for the active tool -->
@@ -126,12 +119,18 @@
         {{ measureLabel.label }}
       </div>
 
-      <!-- Dice tray -->
-      <DiceTray :roller="diceRoller" @ensure3d="setMode('3d')" />
+      <!-- Dice panel (consolidated: 2D viewport + 3D tray in one sidebar) -->
+      <DicePanel :roller="diceRoller" :mode="mode" @roll="onDiceRoll" />
 
-      <!-- 2D dice viewport: a small 3D render of the physics dice so 2D
-           players can roll and see the result without switching modes. -->
-      <DiceViewport v-if="mode === '2d'" @roll="onViewportRoll" />
+      <!-- Initiative tracker (built-in side panel) -->
+      <InitiativeTracker
+        v-if="showInit"
+        :roller="diceRoller"
+        :sync="sync"
+        :scene2d="scene2d"
+        :scene3d="scene3d"
+        ref="initTracker"
+        @close="showInit = false" />
 
       <!-- Asset picker -->
       <AssetPicker
@@ -154,9 +153,6 @@
         v-if="showPerms && role === 'gm'"
         :permissions="permissions"
         @change="onPermsChange" @close="showPerms = false" />
-
-      <!-- Addon panel -->
-      <AddonPanel v-if="showAddons" ref="addonPanel" :manager="addonManager" @close="showAddons=false" />
 
       <!-- GM health editor (double-click a token) -->
       <HealthEditor
@@ -184,10 +180,9 @@
 import axios from '@nextcloud/axios';
 import { generateUrl } from '../lib/url.js';
 import { loadState } from '@nextcloud/initial-state';
-import DiceTray from '../components/DiceTray.vue';
-import AddonPanel from '../components/AddonPanel.vue';
+import DicePanel from '../components/DicePanel.vue';
+import InitiativeTracker from '../components/InitiativeTracker.vue';
 import AssetPicker from '../components/AssetPicker.vue';
-import DiceViewport from '../components/DiceViewport.vue';
 import HealthEditor from '../components/HealthEditor.vue';
 import GridSettings from '../components/GridSettings.vue';
 import PermissionsPanel from '../components/PermissionsPanel.vue';
@@ -199,21 +194,19 @@ import { DiceRoller } from '../engine/3d/DiceRoller.js';
 import { ToolManager } from '../tools/ToolManager.js';
 import { Scene2DAdapter, Scene3DAdapter } from '../engine/SceneAdapter.js';
 import { SyncClient } from '../engine/sync/SyncClient.js';
-import { AddonManager } from '../addons/AddonManager.js';
 
 export default {
   name: 'Room',
-  components: { DiceTray, AddonPanel, AssetPicker, DiceViewport, HealthEditor, GridSettings, PermissionsPanel, TextEditor },
+  components: { DicePanel, InitiativeTracker, AssetPicker, HealthEditor, GridSettings, PermissionsPanel, TextEditor },
   props: { campaignId: [String, Number], sceneId: [String, Number] },
   data() {
     return {
       scene: null, mode: '2d', activeTool: 'pointer', toolList: [],
-      showAddons: false, showAssets: false,
-      diceRoller: null, addonManager: null,
+      showInit: false, showAssets: false,
+      diceRoller: null,
       toast: null, measureUnit: 'ft', aoeShape: 'circle',
       party: [], saving: false, saved: false, syncReady: false, remoteDice: null,
       measureLabel: null,
-      addonActions: [],
       snapEnabled: true,
       buildShape: 'box', buildColor: '#6b5d4f', buildHeight: 1,
       role: 'gm', drawSub: 'pen', drawColor: '#e0c068', drawWidth: 4, drawFill: '#e0c068',
@@ -269,7 +262,6 @@ export default {
     this.adapters['3d'].onMeasure = onMeasure;
 
     await this.connectSync();
-    this.setupAddons();
     this.hydrate(data.data);
     this.applyMode();
     this.loop();
@@ -277,7 +269,6 @@ export default {
   },
   beforeUnmount() {
     this.sync?.disconnect();
-    this.addonManager?.destroy();
     cancelAnimationFrame(this._raf);
     window.removeEventListener('resize', this.resize);
   },
@@ -468,55 +459,13 @@ export default {
         if (mt) mt.feetPerSquare = m.payload.feetPerSquare || 5;
       }
       if (m.type === 'dice:result') {
-        // Show other players' rolls in the tray.
+        // Show other players' rolls in the dice panel.
         this.remoteDice = m.payload;
         setTimeout(() => { if (this.remoteDice === m.payload) this.remoteDice = null; }, 5000);
       }
-      this.addonManager?.emit('scene:change', m);
-      if (m.type === 'dice:result') this.addonManager?.emit('dice:result', m.payload);
-    },
-
-    setupAddons() {
-      this.addonManager = new AddonManager({
-        host: this,
-        capabilities: {
-          sceneRead: () => {
-            // Union of tokens across both scenes so addons see everything on
-            // the table regardless of which mode placed them.
-            const byId = new Map();
-            for (const e of this.scene2d.tokens.values()) byId.set(e.data.id, e.data);
-            for (const e of this.scene3d.tokens.values()) if (!byId.has(e.data.id)) byId.set(e.data.id, e.data);
-            return [...byId.values()];
-          },
-          sceneWrite: (op, p) => {
-            if (op === 'add' || op === 'update') {
-              this.scene2d.upsertToken(p);
-              this.scene3d.upsertToken({ ...p, z: p.y });
-            }
-            if (op === 'delete') { this.scene2d.removeToken(p.id); this.scene3d.removeToken(p.id); }
-          },
-          createTool: (addon, def) =>
-            this.tools.register(makeAddonTool(addon, def, this.addonManager)),
-          createAction: (addon, def) => {
-            // Register a sidebar button that opens this addon's panel.
-            const action = { id: def.id || addon.manifest.name, label: def.name || def.label || addon.manifest.name, icon: def.icon || '🧩', addonId: [...this.addonManager.addons.entries()].find(([, x]) => x === addon)?.[0] };
-            this.addonActions = this.addonActions.filter((x) => x.id !== action.id).concat(action);
-            return true;
-          },
-          broadcast: (p) => this.sync?.send({ type: 'broadcast:' + p.channel, payload: p.payload }),
-          metadataGet: () => ({}),
-          metadataSet: () => true,
-          diceRoll: async (p) => {
-            this.setMode('3d');
-            const rolls = await this.diceRoller.rollAsync(p.notation);
-            const total = (rolls || []).reduce((s, d) => s + (d.value || 0), 0);
-            // Broadcast so other players see the addon's roll too.
-            this.sync?.send({ type: 'dice:result', payload: { rolls, total, notation: p.notation } });
-            return { rolls, total };
-          },
-          notify: (p) => console.info('[addon]', p.text),
-        },
-      });
+      if (m.type === 'broadcast:initiative') {
+        this.$refs.initTracker?.applyRemote?.(m.payload);
+      }
     },
 
     applyMode() {
@@ -548,16 +497,6 @@ export default {
       this.adapters['2d'].snapEnabled = this.snapEnabled;
       this.adapters['3d'].snapEnabled = this.snapEnabled;
       this.scene2d.snapEnabled = this.snapEnabled;
-    },
-
-    openAddonAction(act) {
-      // Open the extensions panel and tell the addon its action was invoked.
-      this.showAddons = true;
-      this.addonManager?.emit('action:open', { id: act.id });
-      // Defer so the panel exists, then mount the addon's UI.
-      this.$nextTick(() => {
-        if (act.addonId) this.$refs.addonPanel?.openById?.(act.addonId);
-      });
     },
 
     setMeasureUnit(u) {
@@ -774,10 +713,9 @@ export default {
       this._toastTimer = setTimeout(() => { this.toast = null; }, 6000);
     },
 
-    /** A roll from the 2D dice viewport — broadcast it to the room. */
-    onViewportRoll(result) {
+    /** A roll from the dice panel — broadcast it to the room. */
+    onDiceRoll(result) {
       this.sync?.send({ type: 'dice:result', payload: result });
-      this.addonManager?.emit('dice:result', result);
     },
 
     // --- Health system (GM controls) ---
@@ -838,13 +776,6 @@ export default {
     },
   },
 };
-
-function makeAddonTool(addon, def, manager) {
-  return {
-    id: def.id, name: def.name, icon: def.icon,
-    onActivate() { manager.emit('tool:click:' + def.id, {}); },
-  };
-}
 </script>
 
 <style scoped>
@@ -944,9 +875,9 @@ function makeAddonTool(addon, def, manager) {
 }
 .toast {
   position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
-  background: #2a0f0c; border: 1px solid #b3402f; color: #f3d9a0;
-  padding: 10px 16px; border-radius: 8px; font-size: 13px; z-index: 20;
-  max-width: 80%; box-shadow: 0 6px 24px rgba(0,0,0,.4);
+  background: var(--g-error); border: 1px solid var(--g-error); color: #fff;
+  padding: 10px 16px; border-radius: var(--g-radius); font-size: 13px; z-index: 20;
+  max-width: 80%; box-shadow: var(--g-shadow);
 }
 .rich-text-layer { position: absolute; inset: 0; pointer-events: none; z-index: 15; }
 .rich-text-item {

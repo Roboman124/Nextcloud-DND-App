@@ -47,3 +47,15 @@ export function generateRouterBase(path) {
   const clean = path.startsWith('/') ? path : '/' + path;
   return root + clean;
 }
+
+/**
+ * Build an absolute URL for a Nextcloud "remote" endpoint (e.g. WebDAV),
+ * mirroring @nextcloud/router's generateRemoteUrl(). Returns e.g.
+ *   https://cloud.example.com/remote.php/dav/
+ * The caller appends `files/<user>/<path>`.
+ * @param {string} service e.g. 'dav'
+ */
+export function generateRemoteUrl(service) {
+  const root = getWebroot();
+  return root + '/remote.php/' + service + '/';
+}
