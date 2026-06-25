@@ -23,7 +23,7 @@ can load glTF character models and build maps in three dimensions.
 - Addon/extension system with a sandboxed GRIM SDK
 - Asset library backed by Nextcloud Files
     ]]></description>
-    <version>0.7.0</version>
+    <version>0.7.1</version>
     <licence>AGPL-3.0-or-later</licence>
     <author>Roboman124</author>
     <namespace>Grimoire</namespace>

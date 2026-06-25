@@ -4,6 +4,24 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.7.1] - 2026-06-25
+
+### Changed
+- **Consolidated dice UI.** Replaced the separate floating DiceTray and
+  DiceViewport with a single DicePanel sidebar. In 2D mode it shows a mini 3D
+  canvas with the physics dice; in 3D mode it drives the main scene's
+  DiceRoller. One panel, mode-appropriate behavior.
+- **Asset picker fixed.** Rewrote AssetPicker to use Nextcloud's native
+  `OC.dialogs.filepicker` and proper WebDAV URLs via `generateRemoteUrl('dav')`,
+  so maps/tokens/models load with session auth. Removed the broken custom
+  BrowseList.
+- **Addons inlined.** Removed the iframe-based addon system. The initiative
+  tracker is now a built-in Vue component toggled from the topbar (⚔).
+- **Nextcloud theming.** All colors now use Nextcloud CSS variables
+  (--color-primary-element, --color-main-background, --color-main-text,
+  --color-border, etc.) so the app follows the user's light/dark theme and
+  the admin's accent color automatically. No more hardcoded gold/blue.
+
 ## [0.7.0] - 2026-06-23
 
 ### Added
