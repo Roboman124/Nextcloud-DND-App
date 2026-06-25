@@ -4,6 +4,30 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.7.2] - 2026-06-25
+
+### Fixed
+- **File picker now works.** Fixed `OC.dialogs.filepicker` call to use the
+  correct 7-arg signature for Nextcloud 28+ — the picker shows a "Choose"
+  button and the callback fires with the selected path.
+- **Permanent rulers no longer snap horizontal.** In 3D the ruler stored
+  y=0 (ground height) instead of z (depth), so all rulers appeared as flat
+  horizontal lines. Now stores both y and z so the ruler renders at the
+  correct depth in 3D mode.
+- **Render loop no longer steps dice in 2D mode.** The 3D DiceRoller was
+  stepping even in 2D mode; now only steps when mode is 3D (the DicePanel
+  manages its own world in 2D).
+
+### Added
+- **DM Control Panel.** A comprehensive left-side sidebar (🛠 in the toolbar,
+  GM only) consolidating all DM controls:
+  - Scene: rename, grid type/size/line-width/opacity/style/colour, scale
+  - Layers: toggle visibility for grid, drawings, fog, fog preview
+  - Player permissions: per-layer create/update/delete/owner-only table
+  - Players: search Nextcloud users, invite, remove
+  - Session: send reminders, reveal all fog, delete scene
+  Replaces the separate GridSettings and PermissionsPanel popovers.
+
 ## [0.7.1] - 2026-06-25
 
 ### Changed

@@ -213,7 +213,12 @@ export class MeasureTool extends Tool {
       // Commit a permanent ruler on pointer-up.
       const id = 'meas_' + Math.random().toString(36).slice(2, 8);
       const sq = this._squares(this.start, w);
-      const m = { id, a: { x: this.start.x, y: this.start.y }, b: { x: w.x, y: w.y }, label: this._format(sq) };
+      // Store both y (2D) and z (3D) so the ruler renders correctly in
+      // whichever scene replays it. In 2D the vertical axis is y; in 3D
+      // it's z (y is always 0 on the ground plane).
+      const a = { x: this.start.x, y: this.start.y, z: this.start.z };
+      const b = { x: w.x, y: w.y, z: w.z };
+      const m = { id, a, b, label: this._format(sq) };
       this.adapter.addMeasurement(m);
       this.placed.add(id);
       this.sync?.send({ type: 'measure:add', payload: m });

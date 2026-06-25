@@ -85,9 +85,24 @@ export default {
     openPicker(title, mimes, allowDirs = false) {
       return new Promise((resolve) => {
         if (window.OC?.dialogs?.filepicker) {
-          window.OC.dialogs.filepicker(title, (path) => resolve(path), false, mimes?.length ? mimes : undefined, allowDirs, true);
+          // NC 28+ OC.dialogs.filepicker(title, callback, multiSelect,
+          //   mimeTypeFilter, allowDirectories, filterFn, modal).
+          // The callback receives the selected path when the user clicks
+          // "Choose" inside the picker. The picker shows a "Choose" button
+          // when it's not a move/copy operation.
+          window.OC.dialogs.filepicker(
+            title,
+            (path) => { resolve(path); },
+            false, // single select
+            mimes?.length ? mimes : undefined, // mime filter
+            allowDirs,
+            null, // no custom filter fn
+            true  // modal
+          );
+        } else if (window.OCA?.Files?.filePicker) {
+          // NC 30+ may expose via OCA.Files — try that too.
+          window.OCA.Files.filePicker(title, (path) => resolve(path), false, mimes, allowDirs);
         } else {
-          // Fallback for the standalone demo (no Nextcloud): paste a URL.
           const url = window.prompt('Paste a direct image/model URL:');
           if (url) resolve(url); else resolve(null);
         }

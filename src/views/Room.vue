@@ -32,8 +32,7 @@
           @click="activate(t.id)">{{ icon(t.id) }}</button>
         <div class="tool-divider" />
         <button class="tool" :class="{on: showAssets}" title="Assets" @click="showAssets = !showAssets">📂</button>
-        <button class="tool" :class="{on: showGrid}" title="Grid settings" @click="showGrid = !showGrid">⊞</button>
-        <button v-if="role === 'gm'" class="tool" :class="{on: showPerms}" title="Player permissions" @click="showPerms = !showPerms">🔒</button>
+        <button v-if="role === 'gm'" class="tool" :class="{on: showDM}" title="DM Controls" @click="showDM = !showDM">🛠</button>
         <div class="tool-divider" />
         <button class="tool" :class="{on: snapEnabled}" :title="snapEnabled ? 'Snap to grid (on)' : 'Free movement (snap off)'" @click="toggleSnap">
           {{ snapEnabled ? '🧲' : '✥' }}
@@ -142,17 +141,22 @@
         @addModel="onAddModel"
       />
 
-      <!-- Grid settings (GM) -->
-      <GridSettings
-        v-if="showGrid && role === 'gm'"
-        :config="gridConfig"
-        @change="onGridChange" @close="showGrid = false" />
-
-      <!-- Player permissions (GM) -->
-      <PermissionsPanel
-        v-if="showPerms && role === 'gm'"
+      <!-- DM control panel (GM only) -->
+      <DMPanel
+        v-if="showDM && role === 'gm'"
+        :scene-name="scene?.name"
+        :grid-config="gridConfig"
         :permissions="permissions"
-        @change="onPermsChange" @close="showPerms = false" />
+        :players="roster"
+        @rename="onRename"
+        @grid="onGridChange"
+        @layer="onLayerToggle"
+        @perms="onPermsChange"
+        @invite="onInvite"
+        @remove-player="onRemovePlayer"
+        @remind="onRemind"
+        @clear-fog="fogRevealAll"
+        @delete-scene="onDeleteScene" />
 
       <!-- GM health editor (double-click a token) -->
       <HealthEditor
@@ -184,8 +188,7 @@ import DicePanel from '../components/DicePanel.vue';
 import InitiativeTracker from '../components/InitiativeTracker.vue';
 import AssetPicker from '../components/AssetPicker.vue';
 import HealthEditor from '../components/HealthEditor.vue';
-import GridSettings from '../components/GridSettings.vue';
-import PermissionsPanel from '../components/PermissionsPanel.vue';
+import DMPanel from '../components/DMPanel.vue';
 import TextEditor from '../components/TextEditor.vue';
 
 import { Scene2D } from '../engine/2d/Scene2D.js';
@@ -197,13 +200,14 @@ import { SyncClient } from '../engine/sync/SyncClient.js';
 
 export default {
   name: 'Room',
-  components: { DicePanel, InitiativeTracker, AssetPicker, HealthEditor, GridSettings, PermissionsPanel, TextEditor },
+  components: { DicePanel, InitiativeTracker, AssetPicker, HealthEditor, DMPanel, TextEditor },
   props: { campaignId: [String, Number], sceneId: [String, Number] },
   data() {
     return {
       scene: null, mode: '2d', activeTool: 'pointer', toolList: [],
-      showInit: false, showAssets: false,
+      showInit: false, showAssets: false, showDM: false,
       diceRoller: null,
+      roster: [],
       toast: null, measureUnit: 'ft', aoeShape: 'circle',
       party: [], saving: false, saved: false, syncReady: false, remoteDice: null,
       measureLabel: null,
@@ -212,13 +216,16 @@ export default {
       role: 'gm', drawSub: 'pen', drawColor: '#e0c068', drawWidth: 4, drawFill: '#e0c068',
       fogSub: 'brush', fogRadius: 36,
       measureMode: 'ruler', measureType: 'euclidean',
-      showGrid: false, gridConfig: { type: 'square', size: 70, lineWidth: 1, opacity: 1, lineStyle: 'solid', color: '#3a3228', feetPerSquare: 5 },
-      showPerms: false, permissions: { maps:{create:true,update:true,delete:true}, tokens:{create:true,update:true,delete:true,ownerOnly:false}, drawings:{create:true,update:true,delete:true}, fog:{create:true,update:true,delete:true} },
+      gridConfig: { type: 'square', size: 70, lineWidth: 1, opacity: 1, lineStyle: 'solid', color: '#3a3228', feetPerSquare: 5 },
+      permissions: { maps:{create:true,update:true,delete:true}, tokens:{create:true,update:true,delete:true,ownerOnly:false}, drawings:{create:true,update:true,delete:true}, fog:{create:true,update:true,delete:true} },
       fogSub: 'brush', fogRadius: 36, fogColor: '#0a0a0a', fogCut: false, fogPreview: false,
       textEditor: null, // {x, y} when open
       richTexts: [],     // [{id, x, y, html, text, color}] persisted overlays
       healthToken: null, healthX: 0, healthY: 0,
     };
+  },
+  watch: {
+    showDM(v) { if (v && this.role === 'gm') this.loadRoster(); },
   },
   async mounted() {
     this.userId = loadState('grimoire', 'userId', 'anon');
@@ -522,6 +529,50 @@ export default {
       if (mt) { mt.feetPerSquare = cfg.feetPerSquare || 5; }
       this.sync?.send({ type: 'grid:config', payload: cfg });
     },
+    onLayerToggle({ layer, on }) {
+      if (layer === 'grid') this.scene2d.layers.grid.visible(on);
+      if (layer === 'drawings') this.scene2d.layers.drawings.visible(on);
+      if (layer === 'fog') this.scene2d.layers.fog.visible(on);
+      if (layer === 'fogPreview') {
+        this.tools.tools.get('fog')?.togglePreview?.();
+      }
+      this.scene2d.stage.batchDraw();
+    },
+    async onRename(name) {
+      this.scene.name = name;
+      this.saveScene();
+    },
+    async onInvite(uid) {
+      try {
+        await axios.put(generateUrl(`/apps/grimoire/api/campaigns/${this.campaignId}/players`), { add: uid });
+        await this.loadRoster();
+      } catch (e) { this._notify('Could not invite player.'); }
+    },
+    async onRemovePlayer(uid) {
+      try {
+        await axios.put(generateUrl(`/apps/grimoire/api/campaigns/${this.campaignId}/players`), { remove: uid });
+        await this.loadRoster();
+      } catch (e) { this._notify('Could not remove player.'); }
+    },
+    async loadRoster() {
+      try {
+        const { data } = await axios.get(generateUrl(`/apps/grimoire/api/campaigns/${this.campaignId}/players`));
+        this.roster = data;
+      } catch { this.roster = []; }
+    },
+    async onRemind() {
+      try {
+        await axios.post(generateUrl(`/apps/grimoire/api/campaigns/${this.campaignId}/remind`), { message: 'Session starting soon!' });
+        this._notify('Reminders sent.');
+      } catch (e) { this._notify('Could not send reminders.'); }
+    },
+    async onDeleteScene() {
+      if (!confirm('Delete this scene? This cannot be undone.')) return;
+      try {
+        await axios.delete(generateUrl(`/apps/grimoire/api/scenes/${this.sceneId}`));
+        this.$router.push('/');
+      } catch (e) { this._notify('Could not delete scene.'); }
+    },
     async onPermsChange(perms) {
       this.permissions = perms;
       try {
@@ -646,7 +697,9 @@ export default {
 
     loop() {
       const dt = this.scene3d.render();
-      this.diceRoller.step(dt);
+      // Only step the dice roller when in 3D mode (the dice share the 3D
+      // world). In 2D mode the DicePanel manages its own world.
+      if (this.mode === '3d') this.diceRoller.step(dt);
       this.projectRichTexts();
       this._raf = requestAnimationFrame(this.loop);
     },
