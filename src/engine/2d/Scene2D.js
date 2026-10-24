@@ -151,7 +151,10 @@ export class Scene2D {
     this.layers.map.add(node);
     this.layers.map.batchDraw();
     this.maps.push({ id: 'map_0', url, x: 0, y: 0, w: img.width, h: img.height, scale: 1 });
-    this._emit('map:set', { url });
+    // No _emit here on purpose: setMap runs during hydration and when applying
+    // remote changes too, and emitting would re-broadcast the map to the room
+    // on every join. The UI action that changes the map sends its own sync
+    // message (see Room.vue onSetMap).
   }
 
   /**
@@ -267,6 +270,9 @@ export class Scene2D {
           group.position({ x: gx, y: gy });
         }
         this.layers.tokens.batchDraw();
+        // Keep entry.data in step so serialize() persists the moved position.
+        const ent = this.tokens.get(token.id);
+        if (ent) ent.data = { ...ent.data, x: gx, y: gy };
         this._emit('token:move', { id: token.id, x: gx, y: gy });
       });
 
@@ -319,7 +325,13 @@ export class Scene2D {
       switch (change.type) {
         case 'token:move': {
           const e = this.tokens.get(change.payload.id);
-          if (e) { e.group.position(change.payload); this.layers.tokens.batchDraw(); }
+          if (e) {
+            e.group.position(change.payload);
+            // Keep entry.data in step so a later save persists the moved
+            // position instead of the stale one.
+            e.data = { ...e.data, x: change.payload.x, y: change.payload.y };
+            this.layers.tokens.batchDraw();
+          }
           break;
         }
         case 'token:upsert': this.upsertToken(change.payload); break;

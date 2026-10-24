@@ -87,9 +87,13 @@ not writing every feature twice. Grimoire solves this with `SceneAdapter`:
 - `Scene2DAdapter` implements those verbs against Konva layers.
 - `Scene3DAdapter` implements them against three meshes + a raycaster.
 
-Switching mode just swaps which adapter the `ToolManager` holds. Add a new
-tool once and it works in both modes the moment both adapters implement the
-verbs it needs.
+A **room is one mode or the other, chosen at creation** (see `Room.vue`): one
+engine is instantiated, one adapter serves the tools, and the scene document
+and sync messages use that engine's native units. Mode-specific tools are
+registered accordingly — `FogTool` only in 2D rooms, `BuildTool` only in 3D
+rooms — and a campaign can hold rooms of both kinds; a room never switches.
+Add a new tool once and it works in both kinds of room the moment both
+adapters implement the verbs it needs.
 
 ---
 

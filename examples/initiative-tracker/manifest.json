@@ -1,8 +1,0 @@
-{
-  "name": "Initiative Tracker",
-  "version": "1.0.0",
-  "author": "Roboman124",
-  "icon": "https://raw.githubusercontent.com/Roboman124/Nextcloud-DND-App/main/examples/initiative-tracker/icon.svg",
-  "main": "https://raw.githubusercontent.com/Roboman124/Nextcloud-DND-App/main/examples/initiative-tracker/index.html",
-  "permissions": ["scene:read", "tool", "broadcast", "metadata", "dice"]
-}

@@ -12,18 +12,29 @@ use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\OCSController;
+use OCP\Defaults;
+use OCP\IConfig;
 use OCP\IRequest;
+use OCP\IURLGenerator;
+use OCP\IUserManager;
+use OCP\Mail\IMailer;
+use Psr\Log\LoggerInterface;
 
 /**
  * CRUD for campaigns, scoped to the logged-in user. Ownership is checked on
- * every read/write so users can only touch their own games. (Player sharing is
- * a later milestone — see ARCHITECTURE.md.)
+ * every read/write so users can only touch their own games.
  */
 class CampaignController extends OCSController {
     public function __construct(
         IRequest $request,
         private CampaignMapper $mapper,
         private DiscordService $discord,
+        private IUserManager $userManager,
+        private IMailer $mailer,
+        private IConfig $config,
+        private Defaults $defaults,
+        private IURLGenerator $urlGenerator,
+        private LoggerInterface $logger,
         private ?string $userId,
     ) {
         parent::__construct(Application::APP_ID, $request);
@@ -131,15 +142,43 @@ class CampaignController extends OCSController {
      * PUT /api/campaigns/{id}/players
      * Body: add (uid) | remove (uid). GM-only: invite or uninvite a player.
      * Players are stored as a JSON array on the campaign's data column.
+     *
+     * Invites are validated (the user must exist and not be the owner) and an
+     * invitation email is sent on add — best-effort; a missing address never
+     * blocks the invite itself. A PUT body-binding miss would otherwise behave
+     * like the old invite saga (200, nothing persisted), so fall back to the
+     * raw JSON body when no param arrives.
      */
     #[NoAdminRequired]
     public function players(int $id, string $add = '', string $remove = ''): JSONResponse {
         $c = $this->ownedOr404($id);
         if ($c instanceof JSONResponse) return $c;
+
+        if ($add === '' && $remove === '') {
+            $raw = json_decode((string) file_get_contents('php://input'), true);
+            if (is_array($raw)) {
+                if (isset($raw['add']) && is_scalar($raw['add'])) $add = trim((string) $raw['add']);
+                if (isset($raw['remove']) && is_scalar($raw['remove'])) $remove = trim((string) $raw['remove']);
+            }
+        }
+        if ($add === '' && $remove === '') {
+            return new JSONResponse(['error' => 'add or remove uid is required'], Http::STATUS_BAD_REQUEST);
+        }
+
         $data = json_decode($c->getData() ?? '{}', true) ?: [];
-        $players = $data['players'] ?? [];
+        $players = is_array($data['players'] ?? null) ? $data['players'] : [];
+
         if ($add !== '') {
-            if (!in_array($add, $players, true)) $players[] = $add;
+            if ($add === $this->userId) {
+                return new JSONResponse(['error' => 'You already own this campaign'], Http::STATUS_BAD_REQUEST);
+            }
+            if (!$this->userManager->get($add)) {
+                return new JSONResponse(['error' => 'No such user'], Http::STATUS_BAD_REQUEST);
+            }
+            if (!in_array($add, $players, true)) {
+                $players[] = $add;
+                $this->sendInviteMail($c, $add);
+            }
         }
         if ($remove !== '') {
             $players = array_values(array_filter($players, static fn($u) => $u !== $remove));
@@ -148,6 +187,63 @@ class CampaignController extends OCSController {
         $c->setData(json_encode($data));
         $this->mapper->update($c);
         return new JSONResponse($this->sanitize($c));
+    }
+
+    /** Email an invitation. Best-effort: false when impossible or it failed. */
+    private function sendInviteMail(Campaign $c, string $uid): bool {
+        $user = $this->userManager->get($uid);
+        $email = $user?->getEMailAddress();
+        if (!$email) return false;
+        try {
+            $link = $this->urlGenerator->linkToRouteAbsolute('grimoire.page.index');
+        } catch (\Throwable) {
+            $link = '';
+        }
+        $title = $c->getTitle();
+        $name = $user->getDisplayName() ?: $uid;
+        $inviter = $this->userId ?? 'A GM';
+        $mail = $this->mailer->createMessage();
+        $mail->setFrom([$this->systemFromAddress() => $this->defaults->getName()]);
+        $mail->setTo([$email => $name]);
+        $mail->setSubject("You're invited to {$title}");
+        $mail->setPlainBody(
+            "Hi {$name},\n\n" .
+            "{$inviter} invited you to the campaign \"{$title}\" on Grimoire.\n\n" .
+            ($link ? "Open the table: {$link}\n\n" : '') .
+            "See you at the table!"
+        );
+        $safeName = htmlspecialchars($name);
+        $safeTitle = htmlspecialchars($title);
+        $safeInviter = htmlspecialchars((string) $inviter);
+        $safeLink = htmlspecialchars($link);
+        $mail->setHtmlBody(
+            "<p>Hi <strong>{$safeName}</strong>,</p>" .
+            "<p><strong>{$safeInviter}</strong> invited you to the campaign <strong>{$safeTitle}</strong> on Grimoire.</p>" .
+            ($link ? "<p><a href=\"{$safeLink}\">Open the table</a></p>" : '') .
+            "<p>See you at the table! 🎲</p>"
+        );
+        try {
+            $this->mailer->send($mail);
+            return true;
+        } catch (\Throwable $e) {
+            $this->logger->error('Grimoire: invite email failed', ['exception' => $e]);
+            return false;
+        }
+    }
+
+    /**
+     * The system "from" email: mail_from_address@mail_domain, or a no-reply
+     * address derived from overwrite.cli.url when unset.
+     */
+    private function systemFromAddress(): string {
+        $local = $this->config->getSystemValue('mail_from_address', '');
+        $domain = $this->config->getSystemValue('mail_domain', '');
+        if ($local && $domain) {
+            return $local . '@' . $domain;
+        }
+        $url = $this->config->getSystemValue('overwrite.cli.url', 'http://localhost');
+        $host = parse_url($url, PHP_URL_HOST) ?: 'localhost';
+        return 'no-reply@' . $host;
     }
 
     /**
@@ -160,6 +256,20 @@ class CampaignController extends OCSController {
     public function permissions(int $id, ?array $permissions = null): JSONResponse {
         $c = $this->ownedOr404($id);
         if ($c instanceof JSONResponse) return $c;
+        // PUT body binding has been unreliable on some setups: a miss here
+        // would default EVERY layer to all-true and silently wipe the saved
+        // permission table. Fall back to the raw JSON body.
+        if ($permissions === null) {
+            $raw = json_decode((string) file_get_contents('php://input'), true);
+            if (is_array($raw) && isset($raw['permissions']) && is_array($raw['permissions'])) {
+                $permissions = $raw['permissions'];
+            }
+        }
+        if ($permissions === null) {
+            // Still nothing — refuse rather than silently saving an all-true
+            // table over the existing permissions.
+            return new JSONResponse(['error' => 'permissions object is required'], Http::STATUS_BAD_REQUEST);
+        }
         $data = json_decode($c->getData() ?? '{}', true) ?: [];
         // Normalize: each layer is {create,update,delete} bools; default true
         // for backward compat (players could always move tokens before).

@@ -4,11 +4,8 @@
       <button class="topbar-btn back" @click="$router.push('/')">
         <span>←</span> Campaigns
       </button>
-      <div class="seg">
-        <button :class="{on: mode==='2d'}" @click="setMode('2d')">2D</button>
-        <button :class="{on: mode==='3d'}" @click="setMode('3d')">3D</button>
-      </div>
       <span class="scene-title">{{ scene?.name }}</span>
+      <span class="kind-badge">{{ mode === '3d' ? '3D' : '2D' }}</span>
       <span class="spacer" />
       <span v-if="party.length" class="party-pill" :title="party.join(', ')">
         👥 {{ party.length }}
@@ -119,7 +116,7 @@
       </div>
 
       <!-- Dice panel (consolidated: 2D viewport + 3D tray in one sidebar) -->
-      <DicePanel :roller="diceRoller" :mode="mode" @roll="onDiceRoll" />
+      <DicePanel :roller="diceRoller" :mode="mode" :remote="remoteDice" @roll="onDiceRoll" />
 
       <!-- Initiative tracker (built-in side panel) -->
       <InitiativeTracker
@@ -134,6 +131,7 @@
       <!-- Asset picker -->
       <AssetPicker
         v-if="showAssets"
+        :kind="mode"
         @close="showAssets = false"
         @setMap="onSetMap"
         @addMap="onAddMap"
@@ -233,40 +231,52 @@ export default {
     this.scene = data;
     this.mode = data.mode || '2d';
 
+    // A room is 2D or 3D, chosen at scene creation and permanent. Exactly one
+    // engine is instantiated; everything in this view works against
+    // `this.engine` and `this.adapter`.
+    this.adapters = {};
+    const is3d = this.mode === '3d';
     this.THREE = await import('three');
     this.CANNON = await import('cannon-es');
-    const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
-    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-    const Konva = (await import('konva')).default;
+    this.diceRoller = null;
 
-    this.scene2d = new Scene2D({
-      Konva, container: this.$refs.stage2d, gridSize: 70,
-      onChange: (c) => this.sync?.send(c),
-    });
-    this.scene3d = new Scene3D({
-      THREE: this.THREE, CANNON: this.CANNON, GLTFLoader, OrbitControls,
-      canvas: this.$refs.canvas3d,
-    });
-    this.diceRoller = new DiceRoller({
-      THREE: this.THREE, CANNON: this.CANNON,
-      scene: this.scene3d.scene, world: this.scene3d.world,
-      onSettle: (r) => {
-        const rolls = Array.isArray(r) ? r : [];
-        const total = rolls.reduce((sum, d) => sum + (d.value || 0), 0);
-        const notation = rolls.map((d) => d.type).join(' + ');
-        this.sync?.send({ type: 'dice:result', payload: { rolls, total, notation } });
-      },
-    });
+    if (!is3d) {
+      const Konva = (await import('konva')).default;
+      this.scene2d = new Scene2D({
+        Konva, container: this.$refs.stage2d, gridSize: 70,
+        onChange: (c) => this.sync?.send(c),
+      });
+      this.engine = this.scene2d;
+      this.adapters['2d'] = new Scene2DAdapter(this.scene2d, { THREE: this.THREE });
+      this.adapter = this.adapters['2d'];
+      // 2D rooms have no 3D table: the DicePanel builds its own private
+      // physics viewport when the tray opens.
+    } else {
+      const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
+      const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+      this.scene3d = new Scene3D({
+        THREE: this.THREE, CANNON: this.CANNON, GLTFLoader, OrbitControls,
+        canvas: this.$refs.canvas3d,
+      });
+      this.engine = this.scene3d;
+      this.adapters['3d'] = new Scene3DAdapter(this.scene3d, { THREE: this.THREE });
+      this.adapter = this.adapters['3d'];
+      // Dice roll on the actual table: share Scene3D's scene + physics world.
+      this.diceRoller = new DiceRoller({
+        THREE: this.THREE, CANNON: this.CANNON,
+        scene: this.scene3d.scene, world: this.scene3d.world,
+        onSettle: (r) => {
+          const rolls = Array.isArray(r) ? r : [];
+          const total = rolls.reduce((sum, d) => sum + (d.value || 0), 0);
+          const notation = rolls.map((d) => d.type).join(' + ');
+          this.sync?.send({ type: 'dice:result', payload: { rolls, total, notation } });
+        },
+      });
+    }
 
-    this.adapters = {
-      '2d': new Scene2DAdapter(this.scene2d, { THREE: this.THREE }),
-      '3d': new Scene3DAdapter(this.scene3d, { THREE: this.THREE }),
-    };
     // Measurement labels render as a screen-space HTML overlay (works in both
-    // 2D and 3D regardless of zoom/camera).
-    const onMeasure = (m) => { this.measureLabel = m; };
-    this.adapters['2d'].onMeasure = onMeasure;
-    this.adapters['3d'].onMeasure = onMeasure;
+    // kinds of room regardless of zoom/camera).
+    this.adapter.onMeasure = (m) => { this.measureLabel = m; };
 
     await this.connectSync();
     this.hydrate(data.data);
@@ -286,67 +296,76 @@ export default {
 
     hydrate(doc) {
       if (!doc) return;
-      if (doc.mapUrl) {
-        this.scene2d.setMap(doc.mapUrl);
-        this.scene3d.setMapTexture(doc.mapUrl);
-      }
-      // Additional maps (multi-floor): reload each beyond the first.
-      for (const m of (doc.maps || []).slice(1)) {
-        this.scene2d.addMap(m.url, m);
-      }
-      for (const t of doc.tokens || []) {
-        this.scene2d.upsertToken(t);
-        this.scene3d.upsertToken({ ...t, kind: t.url ? 'model' : 'primitive', z: t.y });
-      }
-      for (const b of doc.blocks || []) {
-        this.scene3d.addBlock?.(b);
-      }
-      // Replay fog + drawings (2D-only persisted layers).
-      for (const s of doc.fog || []) {
-        if (s.tool === 'cover') this.scene2d.hideAll();
-        else this.scene2d.applyFogStroke(s);
-      }
-      for (const d of doc.drawings || []) {
-        if (d.points) this.scene2d._addLine?.(d);
-        else if (d.shape) this.scene2d._addShape?.(d);
-        else if (d.text && d.html) this.richTexts.push({ ...d });
-        else if (d.text) this.scene2d._addText?.(d);
-      }
-      this.projectRichTexts();
-      for (const ms of doc.measurements || []) {
-        this.scene2d.applyMeasurement?.(ms);
-        this.scene3d.addMeasurement?.(ms);
-      }
-      if (doc.gridConfig) {
-        this.gridConfig = doc.gridConfig;
-        this.scene2d.setGridConfig?.(doc.gridConfig);
-        const mt = this.tools?.tools?.get('measure');
-        if (mt) mt.feetPerSquare = doc.gridConfig.feetPerSquare || 5;
+      if (this.mode === '2d') {
+        if (doc.mapUrl) this._loadMap(doc.mapUrl);
+        // Additional maps (multi-floor): reload each beyond the first.
+        for (const m of (doc.maps || []).slice(1)) {
+          this.scene2d.addMap(m.url, m);
+        }
+        for (const t of doc.tokens || []) {
+          this.scene2d.upsertToken(t);
+        }
+        // Replay fog (2D-only persisted layer).
+        for (const s of doc.fog || []) {
+          if (s.tool === 'cover') this.scene2d.hideAll();
+          else this.scene2d.applyFogStroke(s);
+        }
+        for (const d of doc.drawings || []) {
+          if (d.points) this.scene2d._addLine?.(d);
+          else if (d.shape) this.scene2d._addShape?.(d);
+          else if (d.text && d.html) this.richTexts.push({ ...d });
+          else if (d.text) this.scene2d._addText?.(d);
+        }
+        this.projectRichTexts();
+        for (const ms of doc.measurements || []) this.scene2d.applyMeasurement?.(ms);
+        if (doc.gridConfig) {
+          this.gridConfig = doc.gridConfig;
+          this.scene2d.setGridConfig?.(doc.gridConfig);
+        }
+      } else {
+        if (doc.mapUrl) this._loadMap(doc.mapUrl);
+        for (const t of doc.tokens || []) this.scene3d.upsertToken(this._migrateToken(t));
+        for (const b of doc.blocks || []) this.scene3d.addBlock?.(b);
+        for (const ms of doc.measurements || []) this.scene3d.addMeasurement?.(ms);
       }
     },
 
-    /** Persist both 2D and 3D scene state to the scene's data column. */
+    /**
+     * Best-effort upgrade of tokens saved by the old dual-mode rooms, which
+     * stored positions in 2D stage pixels (70px per square) plus an `h` height.
+     * Native 3D tokens carry x/z world units and y = height.
+     */
+    _migrateToken(t) {
+      if (this.mode !== '3d') return t;
+      const clean = (t.url || '').split('?')[0].toLowerCase();
+      const kind = t.kind || (/\.(glb|gltf)$/.test(clean) ? 'model' : 'primitive');
+      if (typeof t.z === 'number') return { ...t, kind };
+      const g = 70;
+      return { ...t, kind, x: (t.x || 0) / g, z: (t.y || 0) / g, y: t.h || 0 };
+    },
+
+    /** Load the room's map into its engine, surfacing load errors. */
+    _loadMap(url) {
+      if (!url) return;
+      const p = this.mode === '2d' ? this.scene2d.setMap(url) : this.scene3d.setMapTexture(url);
+      Promise.resolve(p).catch(() => this._notify(`Map failed to load: ${url}`));
+    },
+
+    /** Persist the room's scene. The doc is its engine's serialize() output. */
     async saveScene() {
       this.saving = true;
       try {
-        const s2 = this.scene2d.serialize();
-        const s3 = this.scene3d.serialize();
-        // Merge into one document. Tokens are shared across modes; keep the
-        // union keyed by id, and store each mode's map + 3D blocks.
-        const byId = new Map();
-        for (const t of [...s2.tokens, ...s3.tokens]) byId.set(t.id, { ...byId.get(t.id), ...t });
-        const doc = {
-          mapUrl: s2.mapUrl || s3.mapUrl || null,
-          maps: s2.maps || [],
-          map2d: s2.mapUrl || null,
-          map3d: s3.mapUrl || null,
-          tokens: [...byId.values()],
-          blocks: s3.blocks || [],
-          fog: s2.fog || null,
-          drawings: [...(s2.drawings || []), ...this.richTexts.map((r) => ({ id: r.id, x: r.x, y: r.y, html: r.html, text: r.text, color: r.color }))],
-          measurements: s2.measurements || [],
-          gridConfig: s2.gridConfig || this.gridConfig || null,
-        };
+        let doc;
+        if (this.mode === '2d') {
+          const s2 = this.scene2d.serialize();
+          doc = {
+            ...s2,
+            // Rich text overlays live outside Konva — merge them into drawings.
+            drawings: [...(s2.drawings || []), ...this.richTexts.map((r) => ({ id: r.id, x: r.x, y: r.y, html: r.html, text: r.text, color: r.color }))],
+          };
+        } else {
+          doc = this.scene3d.serialize();
+        }
         await axios.put(generateUrl(`/apps/grimoire/api/scenes/${this.sceneId}`), {
           name: this.scene?.name,
           data: doc,
@@ -390,88 +409,112 @@ export default {
       }
     },
 
+    /** Apply a remote change. A room only ever runs one engine, so every 2D-
+     * only message no-ops in 3D rooms and vice versa. */
     onRemote(m) {
       if (m.from === this.userId) return;
-      this.scene2d.applyRemote(m);
-      if (m.type === 'token:move')
-        this.scene3d.upsertToken({ id: m.payload.id, x: m.payload.x, z: m.payload.y });
+      const p = m.payload || {};
+
+      if (m.type === 'token:move') {
+        // Positional payload — merge so the token keeps its identity fields
+        // (kind/url/label); a bare upsert would gut it on the next save.
+        this.scene2d?.applyRemote(m);
+        const cur = this.scene3d?.tokens.get(p.id)?.data;
+        if (cur) this.scene3d.upsertToken({ ...cur, ...p });
+      }
       if (m.type === 'token:upsert') {
-        this.scene2d.upsertToken(m.payload);
-        this.scene3d.upsertToken({ ...m.payload, kind: m.payload.url ? 'model' : 'primitive', z: m.payload.y });
+        this.scene2d?.applyRemote(m);
+        this.scene3d?.upsertToken(this._migrateToken(p));
       }
       if (m.type === 'token:remove') {
-        this.scene2d.removeToken(m.payload.id);
-        this.scene3d.removeToken(m.payload.id);
+        this.scene2d?.removeToken(p.id);
+        this.scene3d?.removeToken(p.id);
       }
       if (m.type === 'token:hp') {
-        this.scene2d.updateHp?.(m.payload.id, m.payload.hp);
-        this.scene3d.updateHp?.(m.payload.id, m.payload.hp);
-        if (this.healthToken?.id === m.payload.id) this.healthToken.hp = m.payload.hp;
+        this.scene2d?.updateHp?.(p.id, p.hp);
+        this.scene3d?.updateHp?.(p.id, p.hp);
+        if (this.healthToken?.id === p.id) this.healthToken.hp = p.hp;
       }
-      if (m.type === 'map:set') {
-        this.scene2d.setMap(m.payload.url);
-        this.scene3d.setMapTexture(m.payload.url);
-      }
-      if (m.type === 'map:add') this.scene2d.addMap(m.payload.url, m.payload);
+
+      if (m.type === 'map:set') this._loadMap(p.url);
+      if (m.type === 'map:add') this.scene2d?.addMap(p.url, p);
       if (m.type === 'map:move') {
-        const node = this.scene2d.layers?.map?.findOne?.('#' + m.payload.id);
-        if (node) { node.position({ x: m.payload.x, y: m.payload.y }); this.scene2d.layers.map.batchDraw(); }
+        const node = this.scene2d?.layers?.map?.findOne?.('#' + p.id);
+        if (node) { node.position({ x: p.x, y: p.y }); this.scene2d.layers.map.batchDraw(); }
       }
       if (m.type === 'map:scale') {
-        const node = this.scene2d.layers?.map?.findOne?.('#' + m.payload.id);
-        if (node) { node.scale({ x: m.payload.scale, y: m.payload.scale }); this.scene2d.layers.map.batchDraw(); }
+        const node = this.scene2d?.layers?.map?.findOne?.('#' + p.id);
+        if (node) { node.scale({ x: p.scale, y: p.scale }); this.scene2d.layers.map.batchDraw(); }
       }
-      if (m.type === 'map:remove') this.scene2d.removeMap(m.payload.id);
-      if (m.type === 'aoe:set') this.scene3d.setAoE(m.payload.id, m.payload);
-      if (m.type === 'block:set') this.scene3d.addBlock(m.payload);
-      if (m.type === 'block:remove') this.scene3d.removeBlock(m.payload.id);
+      if (m.type === 'map:remove') this.scene2d?.removeMap(p.id);
+
+      // AoE: each mode's adapter takes position in its own units; radius is
+      // in grid squares in both. Remote AoE used to be 3D-only.
+      if (m.type === 'aoe:set') {
+        this.adapters['3d']?.setAoE(p.id, { shape: p.shape, x: p.x, z: p.z ?? p.y, radius: p.radius, rotation: p.rotation });
+        this.adapters['2d']?.setAoE(p.id, { shape: p.shape, x: p.x, z: p.z ?? p.y, radius: p.radius, rotation: p.rotation });
+      }
       if (m.type === 'aoe:remove') {
-        this.scene3d.clearAoE?.(m.payload.id);
-        this.adapters['2d'].removeAoE?.(m.payload.id);
+        this.scene3d?.clearAoE?.(p.id);
+        this.adapters['2d']?.removeAoE?.(p.id);
       }
-      if (m.type === 'fog:stroke') this.scene2d.applyFogStroke(m.payload);
-      if (m.type === 'fog:shape') this.scene2d.applyFogShape(m.payload);
+
+      if (m.type === 'block:set') this.scene3d?.addBlock(p);
+      if (m.type === 'block:remove') this.scene3d?.removeBlock(p.id);
+
+      if (m.type === 'fog:stroke') this.scene2d?.applyFogStroke(p);
+      if (m.type === 'fog:shape') this.scene2d?.applyFogShape(p);
       if (m.type === 'fog:shape:remove') {
-        const node = this.scene2d.layers?.fog?.findOne?.('#' + m.payload.id);
-        if (node) { node.destroy(); this.scene2d.layers.fog.batchDraw(); }
-        this.scene2d.fogStrokes = this.scene2d.fogStrokes.filter((s) => s.id !== m.payload.id);
+        const s2 = this.scene2d;
+        const node = s2?.layers?.fog?.findOne?.('#' + p.id);
+        if (node) { node.destroy(); s2.layers.fog.batchDraw(); }
+        if (s2?.fogStrokes) s2.fogStrokes = s2.fogStrokes.filter((s) => s.id !== p.id);
       }
-      if (m.type === 'fog:clear') this.scene2d.clearFog();
-      if (m.type === 'fog:hideall') this.scene2d.hideAll();
-      if (m.type === 'draw:line') this.scene2d._addLine?.(m.payload);
-      if (m.type === 'draw:shape') this.scene2d._addShape?.(m.payload);
+      if (m.type === 'fog:clear') this.scene2d?.clearFog();
+      if (m.type === 'fog:hideall') this.scene2d?.hideAll();
+
+      if (m.type === 'draw:line') this.scene2d?._addLine?.(p);
+      if (m.type === 'draw:shape') this.scene2d?._addShape?.(p);
       if (m.type === 'draw:text') {
-        const p = m.payload;
         if (p.html) {
           // Rich text overlay (HTML).
           if (!this.richTexts.some((r) => r.id === p.id)) this.richTexts.push({ ...p });
           this.projectRichTexts();
         } else {
           // Plain Konva text (legacy / from older clients).
-          this.scene2d._addText?.(p);
+          this.scene2d?._addText?.(p);
         }
       }
+
+      // Remote pointers were broadcast but never rendered — handle them.
+      if (m.type === 'pointer:show' || m.type === 'pointer:move') {
+        this.adapter?.showPointer(p);
+      }
+      if (m.type === 'pointer:hide') this.adapter?.hidePointer();
+
       if (m.type === 'measure:add') {
-        this.scene2d.applyMeasurement?.(m.payload);
-        this.scene3d.addMeasurement?.(m.payload);
+        this.scene2d?.applyMeasurement?.(p);
+        this.scene3d?.addMeasurement?.(p);
       }
       if (m.type === 'measure:remove') {
-        this.scene2d.removeMeasurement?.(m.payload.id);
-        this.scene3d.clearMeasurement?.(m.payload.id);
+        this.scene2d?.removeMeasurement?.(p.id);
+        this.scene3d?.clearMeasurement?.(p.id);
       }
+
       if (m.type === 'grid:config') {
-        this.gridConfig = m.payload;
-        this.scene2d.setGridConfig?.(m.payload);
+        this.gridConfig = p;
+        this.scene2d?.setGridConfig?.(p);
         const mt = this.tools?.tools?.get('measure');
-        if (mt) mt.feetPerSquare = m.payload.feetPerSquare || 5;
+        if (mt) mt.feetPerSquare = p.feetPerSquare || 5;
       }
+
       if (m.type === 'dice:result') {
         // Show other players' rolls in the dice panel.
-        this.remoteDice = m.payload;
-        setTimeout(() => { if (this.remoteDice === m.payload) this.remoteDice = null; }, 5000);
+        this.remoteDice = p;
+        setTimeout(() => { if (this.remoteDice === p) this.remoteDice = null; }, 5000);
       }
       if (m.type === 'broadcast:initiative') {
-        this.$refs.initTracker?.applyRemote?.(m.payload);
+        this.$refs.initTracker?.applyRemote?.(p);
       }
     },
 
@@ -490,20 +533,27 @@ export default {
       if (ft) { ft.setSub(this.fogSub); ft.setRadius(this.fogRadius); ft.setColor(this.fogColor); ft.setCut(this.fogCut); }
       // Hide GM-only tools (fog) from players.
       if (this.role !== 'gm') this.tools.tools.delete('fog');
+      // Fresh tools don't inherit the scene's scale — re-apply it here
+      // (hydrate runs before applyMode, so its tools lookup finds nothing).
+      const mt2 = this.tools.tools.get('measure');
+      if (mt2 && this.gridConfig) mt2.feetPerSquare = this.gridConfig.feetPerSquare || 5;
       this.toolList = this.tools.list();
       this.activeTool = this.tools.active?.id;
       this.applyPermissionGating();
       this.bindPointer();
       this.resize();
     },
-    setMode(m) { if (m === this.mode) return; this.mode = m; this.applyMode(); },
+    // The room kind is set at scene creation and never changes; there is no
+    // mode toggle.
     activate(id) { this.tools.activate(id); this.activeTool = id; },
 
     toggleSnap() {
       this.snapEnabled = !this.snapEnabled;
-      this.adapters['2d'].snapEnabled = this.snapEnabled;
-      this.adapters['3d'].snapEnabled = this.snapEnabled;
-      this.scene2d.snapEnabled = this.snapEnabled;
+      const a2 = this.adapters['2d'];
+      if (a2) a2.snapEnabled = this.snapEnabled;
+      const a3 = this.adapters['3d'];
+      if (a3) a3.snapEnabled = this.snapEnabled;
+      if (this.scene2d) this.scene2d.snapEnabled = this.snapEnabled;
     },
 
     setMeasureUnit(u) {
@@ -524,19 +574,21 @@ export default {
     },
     onGridChange(cfg) {
       this.gridConfig = cfg;
-      this.scene2d.setGridConfig?.(cfg);
+      this.scene2d?.setGridConfig?.(cfg);
       const mt = this.tools.tools.get('measure');
       if (mt) { mt.feetPerSquare = cfg.feetPerSquare || 5; }
       this.sync?.send({ type: 'grid:config', payload: cfg });
     },
     onLayerToggle({ layer, on }) {
-      if (layer === 'grid') this.scene2d.layers.grid.visible(on);
-      if (layer === 'drawings') this.scene2d.layers.drawings.visible(on);
-      if (layer === 'fog') this.scene2d.layers.fog.visible(on);
+      const s2 = this.scene2d;
+      if (!s2) return; // layers are a 2D concept
+      if (layer === 'grid') s2.layers.grid.visible(on);
+      if (layer === 'drawings') s2.layers.drawings.visible(on);
+      if (layer === 'fog') s2.layers.fog.visible(on);
       if (layer === 'fogPreview') {
         this.tools.tools.get('fog')?.togglePreview?.();
       }
-      this.scene2d.stage.batchDraw();
+      s2.stage.batchDraw();
     },
     async onRename(name) {
       this.scene.name = name;
@@ -584,6 +636,7 @@ export default {
     },
     /** Hide/disable tools the player isn't allowed to use. */
     applyPermissionGating() {
+      if (!this.tools) return; // called from connectSync before tools exist
       if (this.role === 'gm') return; // GM bypasses
       const p = this.permissions || {};
       const can = (layer, action) => p[layer]?.[action] !== false;
@@ -689,17 +742,20 @@ export default {
     },
 
     resize() {
-      const el = this.$refs.canvas3d.parentElement;
-      const w = el.clientWidth, h = el.clientHeight;
-      this.scene2d.resize(w, h);
-      this.scene3d.resize(w, h);
+      const el = this.mode === '2d' ? this.$refs.stage2d : this.$refs.canvas3d;
+      const w = el?.parentElement?.clientWidth || el?.clientWidth || 800;
+      const h = el?.parentElement?.clientHeight || el?.clientHeight || 600;
+      this.scene2d?.resize(w, h);
+      this.scene3d?.resize(w, h);
     },
 
     loop() {
-      const dt = this.scene3d.render();
-      // Only step the dice roller when in 3D mode (the dice share the 3D
-      // world). In 2D mode the DicePanel manages its own world.
-      if (this.mode === '3d') this.diceRoller.step(dt);
+      // Only the 3D engine has a render loop (the dice share its world). In
+      // 2D rooms Konva draws on demand and the DicePanel runs its own loop.
+      if (this.mode === '3d') {
+        const dt = this.scene3d.render();
+        this.diceRoller?.step(dt);
+      }
       this.projectRichTexts();
       this._raf = requestAnimationFrame(this.loop);
     },
@@ -707,8 +763,7 @@ export default {
     // --- Asset picker handlers ---
 
     async onSetMap(url) {
-      this.scene2d.setMap(url);
-      this.scene3d.setMapTexture(url);
+      this._loadMap(url);
       this.sync?.send({ type: 'map:set', payload: { url } });
     },
 
@@ -719,10 +774,8 @@ export default {
     },
 
     async onAddToken(t) {
-      // Place in both 2D and 3D scenes.
       const token = { ...t, owner: this.userId };
-      await this.scene2d.upsertToken(token);
-      await this.scene3d.upsertToken({ ...token, kind: 'primitive', z: t.y || 0 });
+      await this.engine.upsertToken(this._migrateToken(token));
       this.sync?.send({ type: 'token:upsert', payload: token });
     },
 
@@ -741,14 +794,16 @@ export default {
       if (url && !isModel) {
         this._notify('Unrecognised model file — expected .glb or .gltf.');
       }
+      if (!this.scene3d) {
+        this._notify('3D models need a 3D room.');
+        return;
+      }
       this.scene3d.onModelError = (data, err) => {
         this._notify(`Model failed to load: ${err?.message || 'check the URL is a direct .glb/.gltf link'}`);
       };
-      this.setMode('3d');
       const token = { ...t, owner: this.userId };
       try {
         await this.scene3d.upsertToken({ ...token, kind: 'model' });
-        await this.scene2d.upsertToken({ ...token, x: t.x || 70, y: t.y || 70, size: 1, color: '#4a90d9' });
         this.sync?.send({ type: 'token:upsert', payload: token });
       } catch (err) {
         // eslint-disable-next-line no-console
@@ -776,8 +831,8 @@ export default {
     /** Open the HP editor for a token near the cursor (GM only). */
     openHealthEditor(id, e) {
       const byId = new Map();
-      for (const t of this.scene2d.tokens.values()) byId.set(t.data.id, t.data);
-      for (const t of this.scene3d.tokens.values()) if (!byId.has(t.data.id)) byId.set(t.data.id, t.data);
+      for (const t of (this.scene2d?.tokens?.values() || [])) byId.set(t.data.id, t.data);
+      for (const t of (this.scene3d?.tokens?.values() || [])) if (!byId.has(t.data.id)) byId.set(t.data.id, t.data);
       const token = byId.get(id);
       if (!token) return;
       this.healthToken = token;
@@ -785,10 +840,10 @@ export default {
       this.healthY = e.clientY;
     },
 
-    /** Apply an HP edit locally + to both scenes, then broadcast. */
+    /** Apply an HP edit locally + to the room's engines, then broadcast. */
     onHealthChange({ id, hp }) {
-      this.scene2d.updateHp?.(id, hp);
-      this.scene3d.updateHp?.(id, hp);
+      this.scene2d?.updateHp?.(id, hp);
+      this.scene3d?.updateHp?.(id, hp);
       this.sync?.send({ type: 'token:hp', payload: { id, hp } });
       // Keep the editor's token in sync so quick +/- buttons reflect.
       if (this.healthToken) this.healthToken.hp = hp;

@@ -130,7 +130,11 @@ export class Scene2DAdapter {
   }
   moveToken(id, w) {
     const e = this.scene.tokens.get(id);
-    if (e) { e.group.position({ x: w.x, y: w.y }); this.scene.getLayer('tokens').batchDraw(); }
+    if (e) {
+      e.group.position({ x: w.x, y: w.y });
+      e.data = { ...e.data, x: w.x, y: w.y };
+      this.scene.getLayer('tokens').batchDraw();
+    }
   }
   snapToGrid(w) {
     const g = this.gridSize;
@@ -292,9 +296,14 @@ export class Scene3DAdapter {
   }
   moveToken(id, w) {
     const e = this.scene.tokens.get(id);
-    if (e) e.mesh.position.set(w.x, e.mesh.position.y, w.z);
+    if (e) {
+      e.mesh.position.set(w.x, e.mesh.position.y, w.z);
+      e.data = { ...e.data, x: w.x, z: w.z };
+    }
   }
-  snapToGrid(w) { return { x: Math.round(w.x), y: 0, z: Math.round(w.z) }; }
+  // Positional only — no y, so a token:move payload can't clobber the token's
+  // height when it is merged into its data on the receiving side.
+  snapToGrid(w) { return { x: Math.round(w.x), z: Math.round(w.z) }; }
   setTokensDraggable() { /* handled via raycast in GrabTool */ }
   highlightToken() {}
 }

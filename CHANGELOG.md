@@ -4,6 +4,83 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.7.3] - 2026-10-25
+
+Room-kind rework, invite hardening, Nextcloud 35, and a port of the sync /
+3D / files-loading fixes verified in code review.
+
+### Changed — rooms are 2D or 3D, never both
+- **Room creation reworked.** The `prompt()`/`confirm('3D?')` flow is replaced
+  by a New Room modal with an explicit 2D/3D kind picker; the choice is set on
+  the scene row at creation and permanent. Room.vue now instantiates exactly
+  one engine (Scene2D *or* Scene3D) and one adapter — the 2D/3D toggle inside a
+  room is gone (a campaign can still hold rooms of both kinds).
+- Scene docs are per-room-kind native (2D: pixels; 3D: world units); tokens
+  saved by the old dual-mode rooms are migrated best-effort on load.
+- Asset picker adapts to the room kind: multi-map + image-token tabs in 2D, a
+  3D models tab in 3D; token spawn positions use the room's native units.
+
+### Fixed — sync
+- **Dice rolls broadcast in one copy.** DicePanel drove the main roller's
+  `onSettle` *and* the room's own handler re-broadcast the roll — every roll
+  reached the room twice. Panel results no longer re-emit for the shared roller.
+- **Other players' rolls display.** `remoteDice` was received but never
+  rendered; the dice panel shows a "someone else rolled" block now.
+- **SyncClient transport fixes.** Leaving a room no longer leaves the client
+  reconnecting forever; an unreachable relay now degrades to long-polling
+  (documented behaviour that was never implemented); polling endpoints are no
+  longer hardcoded to `/index.php/…` (works in subdirectory webroots);
+  malformed relay frames no longer throw; high-frequency `pointer:move` is
+  coalesced (~12/s) instead of one POST per mouse-move.
+- **Remote pointers render** (pointer:show/move/hide were broadcast but never
+  handled) and **remote AoE templates render in 2D** (only 3D got them).
+- **AoE radius measures in grid squares** at the tool, matching both adapters'
+  expectations — dragging a template in 2D no longer explodes its size.
+
+### Fixed — 3D
+- **Models rest on the ground again** (regressed during 0.7.x): tokens are
+  bottom-baked at load time, so a model's placement is y = height, not
+  half-height for everything.
+- **glTF load races**: updates during a load no longer clobber fresher data;
+  removing a token while its model streams in no longer leaves a ghost mesh.
+- **Model scale honoured** (silently ignored before — only primitives scaled).
+- **Token positions persist after moves**: `dragend` and the adapters' moves now
+  stamp `entry.data`, and 3D serialize() reports live mesh positions (used to
+  save stale positions).
+- Map textures are disposed on swap (no more VRAM leak).
+
+### Fixed — Nextcloud files
+- **Asset WebDAV URLs fixed for real.** `generateRemoteUrl('dav') + <path>`
+  resolves against the server DAV root, not the user's files — those URLs
+  401/404. Uses the `webdav` alias (current user's files root) with per-segment
+  URL encoding for names containing spaces/umlauts/`#`.
+- **File picker prefers the current API.** Legacy `OC.dialogs.filepicker` is
+  deprecated (apps are flagged for it); the picker now opens via
+  `@nextcloud/dialogs` FilePickerBuilder (tolerating its v5–v7 shapes) and
+  falls back to the legacy global. New dependency: `@nextcloud/dialogs`.
+- **Map load failures are visible** (toast) instead of unhandled rejections.
+
+### Fixed — backend
+- **Invite/remove validates users** and rejects inviting the owner; the roster
+  can no longer hold dead uids.
+- **Invitations email the player** (best-effort; a missing address doesn't
+  block the invite).
+- **Raw-body fallbacks** on the players and permissions PUT endpoints — the
+  body-binding miss pattern behind the invite saga returned 200 and silently
+  dropped changes; permissions now also refuse to overwrite the saved table
+  with all-defaults when the body never arrived.
+- Permanent 3D rulers persist in the scene document.
+
+### Removed
+- Dead code left behind by the 0.7.1 addon consolidation: the iframe addon
+  host (`src/addons/`), AddonPanel, BrowseList, DiceViewport (superseded by the
+  DicePanel's own viewport), and the superseded DiceTray, GridSettings and
+  PermissionsPanel popovers, plus the plugin docs and the example addon.
+
+### Changed
+- `info.xml`: version 0.7.3, Nextcloud support through 35.
+- README rewritten to describe the current feature set (it still said 0.3.0).
+
 ## [0.7.2] - 2026-06-25
 
 ### Fixed

@@ -1,5 +1,18 @@
 # Grimoire — Handoff for Claude Code
 
+> **v0.7.3 note (2026-10-25).** Rooms are **2D or 3D, never both**: the scene's
+> `mode` is chosen in the New Room modal (`Campaigns.vue`) and permanent;
+> `Room.vue` instantiates exactly one engine + adapter and keys every mode-
+> specific path off it (no toggle, no cross-mode coordinate conversion). The
+> iframe addon system is gone (0.7.1) and its dead files are deleted — invites
+> live on `CampaignController::players` (PUT, GM-only, validated, sends an
+> invite email) and `CampaignController::permissions`; both carry raw-body
+> fallbacks for the known body-binding issue on PUT. `SyncClient` degrades to
+> long-polling when the relay is unreachable and takes an injected `apiUrl`.
+> New dependency: `@nextcloud/dialogs`. Token docs are per-kind native
+> (2D pixels / 3D world units) — old dual-mode docs are migrated best-effort
+> in `Room._migrateToken`.
+
 This is a working **foundation** for a Nextcloud virtual tabletop (VTT) for D&D,
 modeled on Owlbear Rodeo. The architecture, engine, tool framework, addon SDK,
 and physics dice are real and runnable. Several features are deliberately

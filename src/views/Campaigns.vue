@@ -18,6 +18,31 @@
       </div>
     </div>
 
+    <!-- Create room modal -->
+    <div v-if="showScene" class="modal-backdrop" @click.self="showScene = false">
+      <div class="modal">
+        <h2>New Room</h2>
+        <input v-model="sceneName" placeholder="Room name" @keyup.enter="createScene" />
+        <div class="kind-picker">
+          <button :class="['kind-card', { on: sceneKind === '2d' }]" @click="sceneKind = '2d'">
+            <span class="kind-icon">🗺</span>
+            <strong>2D</strong>
+            <small>Battlemap, tokens, fog of war</small>
+          </button>
+          <button :class="['kind-card', { on: sceneKind === '3d' }]" @click="sceneKind = '3d'">
+            <span class="kind-icon">🧊</span>
+            <strong>3D</strong>
+            <small>Miniatures, models, terrain blocks</small>
+          </button>
+        </div>
+        <p class="help-text">A room is one or the other — the choice is permanent. Create another room if you want the other kind.</p>
+        <div class="modal-actions">
+          <button class="ghost" @click="showScene = false">Cancel</button>
+          <button @click="createScene" :disabled="!sceneName.trim()">Create Room</button>
+        </div>
+      </div>
+    </div>
+
     <ul v-if="campaigns.length">
       <li v-for="c in campaigns" :key="c.id" class="campaign-card">
         <div class="card-header">
@@ -34,15 +59,15 @@
           </div>
         </div>
 
-        <!-- Scenes row -->
+        <!-- Rooms row -->
         <div class="scenes">
           <button
             v-for="s in scenesByCampaign[c.id] || []"
             :key="s.id"
             @click="open(c, s)">
-            {{ s.name }} <em>{{ s.mode }}</em>
+            {{ s.name }} <em>{{ s.mode === '3d' ? '3D' : '2D' }}</em>
           </button>
-          <button v-if="c.role !== 'player'" class="ghost" @click="addScene(c)">+ scene</button>
+          <button v-if="c.role !== 'player'" class="ghost" @click="addScene(c)">+ room</button>
         </div>
 
         <!-- Session management panel -->
@@ -154,6 +179,7 @@
 
 <script>
 import axios from '@nextcloud/axios';
+import { loadState } from '@nextcloud/initial-state';
 import { generateUrl } from '../lib/url.js';
 
 export default {
@@ -170,6 +196,10 @@ export default {
       showCreate: false,
       newTitle: '',
       newDesc: '',
+      showScene: false,
+      sceneName: '',
+      sceneKind: '2d',
+      sceneTarget: null,
       inviteSearch: {},
       userResults: {},
       _searchTimer: {},
@@ -179,6 +209,7 @@ export default {
     };
   },
   async mounted() {
+    this.userId = loadState('grimoire', 'userId', '');
     await this.load();
   },
   methods: {
@@ -235,11 +266,25 @@ export default {
     },
 
     async addScene(c) {
-      const name = prompt('Scene name?');
-      if (!name) return;
-      const mode = confirm('3D scene? (Cancel = 2D)') ? '3d' : '2d';
-      await axios.post(this.api(`/campaigns/${c.id}/scenes`), { name, mode });
-      this.load();
+      this.sceneTarget = c;
+      this.sceneName = '';
+      this.sceneKind = '2d';
+      this.showScene = true;
+    },
+
+    async createScene() {
+      const name = this.sceneName.trim();
+      if (!name || !this.sceneTarget) return;
+      try {
+        await axios.post(this.api(`/campaigns/${this.sceneTarget.id}/scenes`), {
+          name,
+          mode: this.sceneKind,
+        });
+        this.showScene = false;
+        await this.load();
+      } catch {
+        alert('Failed to create the room.');
+      }
     },
 
     open(c, s) {
@@ -265,8 +310,11 @@ export default {
             params: { q, limit: 8 },
           });
           const existing = this.campaignData[campaignId]?.players || [];
-          // data is [{uid, displayName}]; filter out already-invited players.
-          this.userResults[campaignId] = data.filter((u) => !existing.includes(u.uid));
+          // Exclude already-invited players and yourself (you can't be
+          // invited to your own campaign).
+          this.userResults[campaignId] = data.filter(
+            (u) => !existing.includes(u.uid) && u.uid !== this.userId
+          );
         } catch {
           this.userResults[campaignId] = [];
         }
@@ -412,6 +460,20 @@ h1 { color: var(--g-primary, #0082c9); letter-spacing: .04em; margin: 0; font-si
   font: inherit; width: 100%; box-sizing: border-box; }
 .modal input:focus, .modal textarea:focus { outline: none; border-color: var(--g-primary, #0082c9); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+
+/* Room-kind picker (2D vs 3D) */
+.kind-picker { display: flex; gap: 10px; }
+.kind-card {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 16px 10px; border-radius: var(--g-radius, 8px); cursor: pointer;
+  background: var(--g-bg-card, #1e2430); border: 1px solid var(--g-border, #2d3748);
+  color: var(--g-text, #d8dde4);
+}
+.kind-card .kind-icon { font-size: 26px; }
+.kind-card strong { font-size: 15px; }
+.kind-card small { color: var(--g-text-dim, #8b949e); font-size: 11px; text-align: center; line-height: 1.4; }
+.kind-card:hover { border-color: var(--g-primary, #0082c9); }
+.kind-card.on { border-color: var(--g-primary, #0082c9); background: color-mix(in srgb, var(--g-primary, #0082c9) 12%, transparent); }
 
 /* Campaign cards */
 ul { list-style: none; padding: 0; }

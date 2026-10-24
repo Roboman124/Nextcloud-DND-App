@@ -37,6 +37,13 @@
       <div class="dp-result dp-empty" v-else-if="open">
         <span class="dp-hint">Pick dice, then roll</span>
       </div>
+
+      <!-- Another player's roll, shown briefly on receipt -->
+      <div class="dp-result" v-if="remote">
+        <span class="dp-remote-label">Someone else rolled</span>
+        <span class="dp-total">{{ remote.total }}</span>
+        <span class="dp-breakdown">{{ remoteBreakdown }}</span>
+      </div>
     </div>
   </aside>
 </template>
@@ -66,6 +73,8 @@ export default {
     mode: { type: String, default: '2d' },
     /** Initial open state. */
     startOpen: { type: Boolean, default: true },
+    /** Another player's latest roll (shown briefly). */
+    remote: { type: Object, default: null },
   },
   emits: ['roll'],
   data() {
@@ -80,6 +89,10 @@ export default {
   },
   computed: {
     totalDice() { return Object.values(this.counts).reduce((s, n) => s + n, 0); },
+    remoteBreakdown() {
+      const rolls = this.remote?.rolls;
+      return Array.isArray(rolls) ? rolls.map((x) => `${x.type}:${x.value}`).join('  ') : '';
+    },
   },
   watch: {
     mode: { immediate: true, handler() { this.syncRoller(); } },
@@ -92,7 +105,9 @@ export default {
       if (this.mode === '3d' && this.roller) {
         const prev = this.roller.onSettle;
         this.roller.onSettle = (results) => {
-          this.showResults(results);
+          // Don't emit 'roll' here — the room's own onSettle already
+          // broadcasts these results; emitting again sent every roll twice.
+          this.showResults(results, false);
           try { prev?.(results); } catch { /* ignore */ }
         };
       }
@@ -112,12 +127,15 @@ export default {
       if (!r) return;
       r.rollAsync(spec).then((results) => this.showResults(results));
     },
-    showResults(results) {
+    showResults(results, emit = true) {
       const sum = results.reduce((s, x) => s + (x.value || 0), 0);
       this.total = String(sum);
       this.display = results.map((x) => `${x.type}:${x.value}`).join('  ');
       this.lastResult = String(sum);
-      this.$emit('roll', { rolls: results, total: sum, notation: results.map((r) => r.type).join(' + ') });
+      if (emit) {
+        // The private 2D roller has no other sync path — broadcast it.
+        this.$emit('roll', { rolls: results, total: sum, notation: results.map((r) => r.type).join(' + ') });
+      }
     },
     // --- 2D mode: private 3D scene ---
     ensureScene() { if (!this.viewportRoller) this._initScene(); },
@@ -249,4 +267,8 @@ export default {
 .dp-breakdown { display: block; font-size: 11px; color: var(--g-text-dim); margin-top: 2px; }
 .dp-empty { color: var(--g-text-dim); }
 .dp-hint { font-size: 12px; font-style: italic; }
+.dp-remote-label { display: block; font-size: 10px; text-transform: uppercase;
+  letter-spacing: .1em; color: var(--color-text-maxcontrast, var(--g-text-dim, #8b949e));
+  margin-bottom: 2px; }
+.dp-result[style] .dp-remote-label, .dp-result .dp-remote-label + .dp-total { font-size: 20px; }
 </style>

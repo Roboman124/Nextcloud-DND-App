@@ -99,17 +99,34 @@ export class Scene3D {
     this._mapUrl = url;
     const tex = await new THREE.TextureLoader().loadAsync(url);
     tex.colorSpace = THREE.SRGBColorSpace;
+    const old = this.ground.material.map;
     this.ground.material.map = tex;
     this.ground.material.color.set(0xffffff);
     this.ground.material.needsUpdate = true;
+    // Free the previous GPU texture — repeated map swaps otherwise leak VRAM.
+    if (old && old !== tex) old.dispose();
   }
 
   /** Serialize the 3D scene to a plain object for persistence. */
   serialize() {
     return {
       mapUrl: this._mapUrl || null,
-      tokens: [...this.tokens.values()].map((e) => ({ ...e.data })),
+      // Positions come from the live meshes so a drag never gets lost on save;
+      // primitives are centre-anchored, so their height reads back minus the
+      // half-height offset applied at placement.
+      tokens: [...this.tokens.values()].map((e) => {
+        const d = { ...e.data };
+        const m = e.mesh;
+        if (m) {
+          const isModel = d.kind === 'model' && !m.userData?.loadFailed && m.userData?.isModelWrapper;
+          d.x = m.position.x;
+          d.z = m.position.z;
+          d.y = isModel ? m.position.y : m.position.y - 0.9;
+        }
+        return d;
+      }),
       blocks: [...(this.blocks?.values() || [])].map((b) => ({ ...b.data })),
+      measurements: [...this.measurements.values()].map((m) => m.data).filter(Boolean),
     };
   }
 
@@ -121,19 +138,40 @@ export class Scene3D {
     const { THREE } = this;
     let entry = this.tokens.get(data.id);
     if (!entry) {
+      // Register immediately so serialize() sees this token even while a glTF
+      // load is in progress — a save mid-load otherwise drops the token.
+      entry = { mesh: null, data };
+      this.tokens.set(data.id, entry);
+
       let mesh;
       if (data.kind === 'model' && data.url && this.gltfLoader) {
         try {
           const gltf = await this.gltfLoader.loadAsync(data.url);
+          // The token may have been removed while the model streamed in —
+          // adding the mesh now would leave a ghost nobody can delete.
+          if (this.tokens.get(data.id) !== entry) return entry;
           mesh = gltf.scene;
           mesh.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
           // Normalise scale: fit the model into roughly a 2-unit cube so wildly
           // different glTF export scales don't appear as a dot or a giant.
-          const box = new THREE.Box3().setFromObject(mesh);
+          let box = new THREE.Box3().setFromObject(mesh);
           const size = box.getSize(new THREE.Vector3());
           const maxDim = Math.max(size.x, size.y, size.z) || 1;
           if (maxDim > 0) mesh.scale.multiplyScalar(2 / maxDim);
+          // Bake origin to bottom-centre so position.y = data.y rests the
+          // model on the ground no matter how it was exported.
+          mesh.updateMatrixWorld(true);
+          box = new THREE.Box3().setFromObject(mesh);
+          const centre = box.getCenter(new THREE.Vector3());
+          const wrapper = new THREE.Group();
+          mesh.position.x -= centre.x;
+          mesh.position.z -= centre.z;
+          mesh.position.y -= box.min.y; // bottom to y=0
+          wrapper.add(mesh);
+          wrapper.userData.isModelWrapper = true;
+          mesh = wrapper;
         } catch (err) {
+          if (this.tokens.get(data.id) !== entry) return entry;
           // Don't fail silently — log, then drop in a visible red placeholder
           // so the user knows the token exists but the model URL didn't load.
           // eslint-disable-next-line no-console
@@ -156,21 +194,36 @@ export class Scene3D {
       }
       mesh.userData.tokenId = data.id;
       this.scene.add(mesh);
-      entry = { mesh, data };
-      this.tokens.set(data.id, entry);
+      entry.mesh = mesh; // update the entry registered before the async load
+      // A concurrent upsert during the load may hold fresher fields (moved
+      // while loading) — apply entry.data, not the pre-await snapshot.
+      this._applyTokenTransform(entry, entry.data);
+      this._renderHp(entry);
+      return entry;
     }
-    const m = entry.mesh;
-    m.position.set(data.x || 0, (data.y || 0) + 0.9, data.z || 0);
-    m.rotation.y = data.rotation || 0;
-    // Only apply explicit scale to primitives / failed placeholders; loaded
-    // models are already normalised above.
-    if (!(entry.mesh.userData && entry.mesh.children?.length && data.kind === 'model' && !entry.mesh.userData.loadFailed)) {
-      const s = data.scale || 1;
-      if (data.kind !== 'model' || entry.mesh.userData.loadFailed) m.scale.setScalar(s);
-    }
+    if (!entry.mesh) { entry.data = data; this._renderHp(entry); return entry; }
     entry.data = data;
+    this._applyTokenTransform(entry, data);
     this._renderHp(entry);
     return entry;
+  }
+
+  /** Position/rotate/scale a token mesh from its data. */
+  _applyTokenTransform(entry, data) {
+    const m = entry.mesh;
+    if (!m || !data) return;
+    const isModel = data.kind === 'model' && !m.userData?.loadFailed && m.userData?.isModelWrapper;
+    m.rotation.y = data.rotation || 0;
+    // The wrapper's children carry the load-time normalisation, so scaling the
+    // wrapper applies the user's scale cleanly (models included — it used to
+    // be silently ignored for them).
+    m.scale.setScalar(data.scale || 1);
+    if (isModel) {
+      m.position.set(data.x || 0, data.y || 0, data.z || 0);
+    } else {
+      // Primitives (cylinder h=1.8) and failed placeholders are centre-anchored:
+      m.position.set(data.x || 0, (data.y || 0) + 0.9, data.z || 0);
+    }
   }
 
   /** Update a token's HP billboard. Emits nothing (caller syncs). */
@@ -277,7 +330,7 @@ export class Scene3D {
     dotA.position.set(m.a.x, 0.1, m.a.z ?? m.a.y);
     dotB.position.set(m.b.x, 0.1, m.b.z ?? m.b.y);
     this.scene.add(line, dotA, dotB);
-    this.measurements.set(m.id, { line, dotA, dotB });
+    this.measurements.set(m.id, { line, dotA, dotB, data: m });
   }
 
   clearMeasurement(id) {

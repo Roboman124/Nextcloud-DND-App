@@ -269,7 +269,12 @@ export class AoETool extends Tool {
   }
   onPointerMove(w) {
     if (!this.origin) return;
-    const r = Math.hypot((w.x - this.origin.x), ((w.z ?? w.y) - (this.origin.z ?? this.origin.y)));
+    // Radius is expressed in grid squares (the adapters scale it to their own
+    // units: Scene2D multiplies by gridSize, Scene3D uses world units 1:1).
+    // Measuring the raw world distance here made 2D templates explode in size
+    // while dragging (px fed into a squares field).
+    const g = this.adapter.gridSize || 1;
+    const r = Math.hypot((w.x - this.origin.x), ((w.z ?? w.y) - (this.origin.z ?? this.origin.y))) / g;
     const rot = Math.atan2((w.z ?? w.y) - (this.origin.z ?? this.origin.y), w.x - this.origin.x);
     this._last = { shape: this.shape, x: this.origin.x, z: this.origin.z ?? this.origin.y, radius: Math.max(0.5, r), rotation: rot };
     this.adapter.setAoE(this.id, this._last);

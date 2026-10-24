@@ -14,7 +14,7 @@
       <template v-if="activeTab === 'map'">
         <p class="hint">Set a battle map from your Nextcloud Files.</p>
         <button class="pick-btn" @click="pickMap">🗺 Pick Map</button>
-        <button class="pick-btn secondary" @click="pickMapExtra">➕ Add Map (multi-floor)</button>
+        <button v-if="kind === '2d'" class="pick-btn secondary" @click="pickMapExtra">➕ Add Map (multi-floor)</button>
         <div v-if="recentMaps.length" class="recent">
           <p class="recent-label">Recent</p>
           <div class="thumb-grid">
@@ -62,37 +62,76 @@ const IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'imag
 
 export default {
   name: 'AssetPicker',
+  props: {
+    /** Room kind: '2d' or '3d'. 3D rooms never see image-token tabs that don't
+     * apply, and token spawn coordinates use the room's native units. */
+    kind: { type: String, default: '2d' },
+  },
   emits: ['close', 'setMap', 'addMap', 'addToken', 'addModel'],
   data() {
     return {
       activeTab: 'map',
-      tabs: [
-        { id: 'map', label: '🗺 Maps' },
-        { id: 'tokens', label: '🧙 Tokens' },
-        { id: 'models', label: '📦 3D Models' },
-      ],
       recentMaps: [],
       tokenLabel: '', tokenColor: '#4a90d9',
       tokenImageUrl: null, tokenImageName: '',
       modelLabel: '', modelUrl: null, modelName: '',
     };
   },
+  computed: {
+    tabs() {
+      const tabs = [
+        { id: 'map', label: '🗺 Maps' },
+        { id: 'tokens', label: '🧙 Tokens' },
+      ];
+      if (this.kind === '3d') tabs.push({ id: 'models', label: '📦 3D Models' });
+      return tabs;
+    },
+    /** Placement defaults in the room's native units (2D: pixels, 3D: world). */
+    spawn() {
+      return this.kind === '3d' ? { x: 1, z: 1, y: 0 } : { x: 70, y: 70 };
+    },
+  },
   mounted() {
     try { this.recentMaps = JSON.parse(localStorage.getItem('grimoire_recent_maps') || '[]'); } catch { this.recentMaps = []; }
   },
   methods: {
-    /** Open Nextcloud's native file picker. Returns a Promise<path>. */
-    openPicker(title, mimes, allowDirs = false) {
+    /**
+     * Open Nextcloud's file picker. Prefers the current @nextcloud/dialogs
+     * FilePickerBuilder (the legacy OC.dialogs.filepicker is deprecated and
+     * apps are flagged for it); falls back to the legacy global on older
+     * servers. Resolves to a Files path, or null when unavailable/cancelled.
+     */
+    async openPicker(title, mimes, allowDirs = false) {
+      // @nextcloud/dialogs builder — method names shifted across v5–v7
+      // (setMimeTypeFilter→addMimeTypeFilter, start()→build().pick()), so probe
+      // rather than pin one shape.
+      try {
+        const { getFilePickerBuilder } = await import('@nextcloud/dialogs');
+        let b = getFilePickerBuilder(title);
+        if (mimes?.length && typeof b.addMimeTypeFilter === 'function') {
+          for (const m of mimes) b = b.addMimeTypeFilter(m) || b;
+        } else if (mimes?.length && typeof b.setMimeTypeFilter === 'function') {
+          b = b.setMimeTypeFilter(mimes) || b;
+        }
+        if (typeof b.setMultiSelect === 'function') b = b.setMultiSelect(false) || b;
+        // allowDirectories: the builder opens directory-agnostic by default in
+        // v5–v7; nothing to force-disable, the mime filter does the narrowing.
+        const picker = typeof b.build === 'function' ? (b.build() || b) : b;
+        const opened = typeof picker.pick === 'function' ? picker.pick() : b.start();
+        const res = await opened;
+        return (Array.isArray(res) ? res[0] : res) || null;
+      } catch { /* fall through to the legacy picker */ }
+
       return new Promise((resolve) => {
         if (window.OC?.dialogs?.filepicker) {
           // NC 28+ OC.dialogs.filepicker(title, callback, multiSelect,
           //   mimeTypeFilter, allowDirectories, filterFn, modal).
-          // The callback receives the selected path when the user clicks
-          // "Choose" inside the picker. The picker shows a "Choose" button
-          // when it's not a move/copy operation.
           window.OC.dialogs.filepicker(
             title,
-            (path) => { resolve(path); },
+            (picked) => {
+              // Some versions hand back an array even in single-select mode.
+              resolve((Array.isArray(picked) ? picked[0] : picked) || null);
+            },
             false, // single select
             mimes?.length ? mimes : undefined, // mime filter
             allowDirs,
@@ -103,15 +142,27 @@ export default {
           // NC 30+ may expose via OCA.Files — try that too.
           window.OCA.Files.filePicker(title, (path) => resolve(path), false, mimes, allowDirs);
         } else {
+          // Outside Nextcloud (standalone demo): paste a URL instead.
           const url = window.prompt('Paste a direct image/model URL:');
-          if (url) resolve(url); else resolve(null);
+          resolve(url || null);
         }
       });
     },
     /** Build a direct WebDAV download URL for a path the picker returned. */
     webdavUrl(path) {
       if (/^https?:\/\//.test(path)) return path; // already absolute
-      return generateRemoteUrl('dav') + path.replace(/^\//, '');
+      // Encode each segment so names with spaces, umlauts, # or ? resolve.
+      const encoded = '/' + String(path)
+        .split('/')
+        .filter(Boolean)
+        .map(encodeURIComponent)
+        .join('/');
+      // remote.php/webdav is the alias onto the CURRENT USER's files root.
+      // remote.php/dav alone is the server DAV root — paths under it 401/404.
+      if (typeof window.OC?.generateRemoteUrl === 'function') {
+        try { return window.OC.generateRemoteUrl('webdav') + encoded; } catch { /* fall through */ }
+      }
+      return generateRemoteUrl('webdav') + encoded;
     },
     async pickMap() {
       const path = await this.openPicker('Choose a map image', IMAGE_MIMES);
@@ -150,7 +201,8 @@ export default {
       this.$emit('addToken', {
         id: 'token_' + Date.now(), label: this.tokenLabel.trim(),
         url: this.tokenImageUrl || null, color: this.tokenColor,
-        x: 70, y: 70, size: 1, kind: 'primitive',
+        size: 1, scale: 1, kind: 'primitive',
+        ...this.spawn,
       });
       this.tokenLabel = ''; this.tokenImageUrl = null; this.tokenImageName = '';
     },
@@ -158,7 +210,8 @@ export default {
       if (!this.modelUrl) return;
       this.$emit('addModel', {
         id: 'model_' + Date.now(), label: this.modelLabel.trim() || 'Model',
-        url: this.modelUrl, kind: 'model', x: 0, z: 0, scale: 1,
+        url: this.modelUrl, kind: 'model', scale: 1,
+        ...this.spawn,
       });
       this.modelLabel = ''; this.modelUrl = null; this.modelName = '';
     },
