@@ -25,10 +25,33 @@ function showFatal(err) {
   console.error('[grimoire] boot failed', err);
 }
 
+/**
+ * The router base is the app path as THIS browser actually sees it, not an
+ * assumed web path. Servers differ in how the SPA is reached: pretty URLs
+ * serve /<webroot>/apps/grimoire/… while front-controller installs serve
+ * /<webroot>/index.php/apps/grimoire/…. The previously hardcoded
+ * '/apps/grimoire' base never matched on front-controller instances — no
+ * route resolved, the app rendered blank, and router-pushed paths (with the
+ * base spliced in) 404ed on reload.
+ */
+function computeRouterBase() {
+  const marker = '/apps/grimoire';
+  if (typeof window !== 'undefined' && window.location) {
+    const path = window.location.pathname.toLowerCase();
+    const pos = path.indexOf(marker);
+    if (pos !== -1) {
+      // Keep whatever serving prefix the server actually used (including an
+      // /index.php front-controller prefix or a deeper webroot).
+      return window.location.pathname.slice(0, pos) + marker;
+    }
+  }
+  return generateRouterBase(marker);
+}
+
 function boot() {
   try {
     const router = createRouter({
-      history: createWebHistory(generateRouterBase('/apps/grimoire')),
+      history: createWebHistory(computeRouterBase()),
       routes: [
         { path: '/', name: 'campaigns', component: Campaigns },
         { path: '/c/:campaignId/s/:sceneId', name: 'room', component: Room, props: true },

@@ -124,8 +124,14 @@ export default {
 
       return new Promise((resolve) => {
         if (window.OC?.dialogs?.filepicker) {
-          // NC 28+ OC.dialogs.filepicker(title, callback, multiSelect,
-          //   mimeTypeFilter, allowDirectories, filterFn, modal).
+          // Legacy signature on NC 28+ (see core/src/OC/dialogs.js):
+          //   filepicker(title, callback, multiselect, mimetype, _modal,
+          //              type, path, options)
+          // Trailing args used to be filled positionally as
+          // (false, undefined, null, true) — that put `null` into the `type`
+          // slot: with type !== Choose the dialog never showed its Choose
+          // button, so glb files were listed but could not be picked. Keep
+          // the deprecated trailing slots empty instead.
           window.OC.dialogs.filepicker(
             title,
             (picked) => {
@@ -133,14 +139,14 @@ export default {
               resolve((Array.isArray(picked) ? picked[0] : picked) || null);
             },
             false, // single select
-            mimes?.length ? mimes : undefined, // mime filter
-            allowDirs,
-            null, // no custom filter fn
-            true  // modal
+            mimes?.length ? mimes : undefined, // mime filter (unset shows all files)
+            undefined, // _modal — ignored/deprecated
+            undefined, // type — default = Choose
+            undefined  // path — start at the Files root
           );
         } else if (window.OCA?.Files?.filePicker) {
           // NC 30+ may expose via OCA.Files — try that too.
-          window.OCA.Files.filePicker(title, (path) => resolve(path), false, mimes, allowDirs);
+          window.OCA.Files.filePicker(title, (path) => resolve(path), false, mimes);
         } else {
           // Outside Nextcloud (standalone demo): paste a URL instead.
           const url = window.prompt('Paste a direct image/model URL:');

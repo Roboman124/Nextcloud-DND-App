@@ -4,6 +4,30 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.7.4] - 2026-10-25
+
+Hotfix for two user-reported issues (#both against 0.7.2/0.7.3-era builds).
+
+### Fixed
+- **White page when opening Grimoire from the app menu; "Page not found" on
+  reload.** The Vue router base was hardcoded to the pretty web path
+  (`<webroot>/apps/grimoire`), but servers reach the SPA two ways: pretty URLs
+  or the front-controller path (`/<webroot>/index.php/apps/grimoire/…`). On
+  front-controller servers the base never matched, no route resolved, and the
+  app rendered an empty page; router-pushed paths also 404ed on reload. The
+  base is now derived at boot from the URL the page was actually served at, so
+  both serving modes — and subdirectory webroots — work, and deep links
+  (`/c/{campaignId}/s/{sceneId}`) reload correctly.
+- **glb files visible but not pickable in the 3D model picker.** The legacy
+  `OC.dialogs.filepicker` signature on NC 28+ is
+  `(title, callback, multiselect, mimetype, _modal, type, path, options)` —
+  the call filled the trailing slots positionally as
+  `(false, undefined, null, true)`, putting `null` in the `type` slot; with
+  `type !== Choose`, NC never shows the dialog's Choose button, so model files
+  were listed but could not be selected. The deprecated trailing slots
+  (`_modal`, `type`, `path`) are now left empty so the picker opens in its
+  default Choose mode.
+
 ## [0.7.3] - 2026-10-25
 
 Room-kind rework, invite hardening, Nextcloud 35, and a port of the sync /
