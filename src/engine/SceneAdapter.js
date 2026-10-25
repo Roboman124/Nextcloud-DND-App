@@ -169,13 +169,13 @@ export class Scene2DAdapter {
     this._fogPreview.points(this._fogPoints);
     this.scene.getLayer('fog').batchDraw();
   }
-  endFogStroke() {
+  endFogStroke(overrides = {}) {
     if (!this._fogPreview) return null;
     const stroke = {
       tool: this._fogTool,
       points: this._fogPoints.slice(),
-      color: '#0a0a0a',
-      radius: 36,
+      color: overrides.color || '#0a0a0a',
+      radius: overrides.radius || 36,
     };
     // Commit to the scene's recorded strokes and emit. The preview node
     // becomes the committed node (we keep it).
@@ -286,10 +286,12 @@ export class Scene3DAdapter {
     const wx = w.x, wz = (w.z !== undefined ? w.z : w.y);
     let best = null, bestDist = Infinity;
     for (const [id, e] of this.scene.tokens) {
+      if (!e.mesh) continue; // model still loading — it has no position yet
       const p = e.mesh.position;
       const d = Math.hypot(p.x - wx, p.z - wz);
-      // Grab radius scales with the token's footprint (~1 unit default).
-      const radius = Math.max(1.2, (e.data.size || 1) * 1.2);
+      // Grab radius scales with the token's footprint (~1.5 unit default;
+      // models sit inside a ~2-unit footprint after load normalisation).
+      const radius = Math.max(1.5, (e.data.size || 1) * 1.5);
       if (d <= radius && d < bestDist) { bestDist = d; best = id; }
     }
     return best ? { id: best } : null;
@@ -306,4 +308,37 @@ export class Scene3DAdapter {
   snapToGrid(w) { return { x: Math.round(w.x), z: Math.round(w.z) }; }
   setTokensDraggable() { /* handled via raycast in GrabTool */ }
   highlightToken() {}
+
+  // --- Fog of war (3D). The FogTool speaks these verbs in both modes; the
+  // stroke store keeps the 2D-pixel format, so 3D strokes convert at these
+  // edges and the saved/remote shapes stay cross-compatible.
+
+  /** 3D world point -> shared stroke-space pixel (centre-anchored). */
+  _toStrokeSpace(w) { return { x: (w.x || 0) * 70 + 2000, y: (w.z ?? 0) * 70 + 2000 }; }
+
+  beginFogStroke(w, tool) {
+    const p = this._toStrokeSpace(w);
+    this._fogTool = tool;
+    this._fogPoints = [p.x, p.y];
+  }
+  extendFogStroke(w) {
+    if (!this._fogPoints) return;
+    const p = this._toStrokeSpace(w);
+    this._fogPoints.push(p.x, p.y);
+  }
+  endFogStroke(overrides = {}) {
+    if (!this._fogPoints) return null;
+    const stroke = {
+      tool: this._fogTool,
+      points: this._fogPoints.slice(),
+      color: overrides.color || '#0a0a0a',
+      radius: overrides.radius || 36,
+    };
+    this.scene.addFogStroke(stroke);
+    this._fogPoints = null;
+    this._fogTool = null;
+    return stroke;
+  }
+  setFogColor(c) { this.scene.setFogColor?.(c); }
+  setFogPreview(on) { this.scene.setFogPreview?.(on); }
 }

@@ -494,6 +494,13 @@ export class FogTool extends Tool {
   }
   onActivate() { this._polyPts = null; }
   onDeactivate() { this._polyPts = null; this.adapter.scene?.setFogPreview?.(false); this.preview = false; }
+  /** World point -> shared fog stroke space (2D px). 2D: identity — the
+   * adapter's stage pixels ARE the stroke space; 3D: converts x/z. */
+  _s(w) {
+    return this.adapter._toStrokeSpace
+      ? this.adapter._toStrokeSpace(w)
+      : { x: w.x, y: w.y };
+  }
   onPointerDown(w) {
     if (this.sub === 'brush' || this.sub === 'eraser') {
       this.adapter.beginFogStroke?.(w, this.sub === 'eraser' ? 'eraser' : 'brush');
@@ -501,19 +508,21 @@ export class FogTool extends Tool {
       return;
     }
     if (this.sub === 'rect' || this.sub === 'circle') {
-      this.start = w;
+      this.start = this._s(w);
       return;
     }
     if (this.sub === 'polygon') {
       // Click adds a point; double-click closes (handled in onDoubleClick).
-      if (!this._polyPts) this._polyPts = [w.x, w.y];
-      else this._polyPts.push(w.x, w.y);
+      const p = this._s(w);
+      if (!this._polyPts) this._polyPts = [p.x, p.y];
+      else this._polyPts.push(p.x, p.y);
       return;
     }
   }
   onPointerMove(w) {
     if (this._drawing) { this.adapter.extendFogStroke?.(w); return; }
     if ((this.sub === 'rect' || this.sub === 'circle') && this.start) {
+      const p = this._s(w);
       // Live preview shape on the fog layer (kept simple: update a temp node).
       this._liveShape?.destroy?.();
       const Konva = this.adapter.scene?.Konva;
@@ -522,12 +531,12 @@ export class FogTool extends Tool {
       const comp = this.cut ? 'destination-out' : 'source-over';
       if (this.sub === 'rect') {
         this._liveShape = new Konva.Rect({
-          x: Math.min(this.start.x, w.x), y: Math.min(this.start.y, w.y),
-          width: Math.abs(w.x - this.start.x), height: Math.abs(w.y - this.start.y),
+          x: Math.min(this.start.x, p.x), y: Math.min(this.start.y, p.y),
+          width: Math.abs(p.x - this.start.x), height: Math.abs(p.y - this.start.y),
           fill: this.color, listening: false, globalCompositeOperation: comp,
         });
       } else {
-        const r = Math.hypot(w.x - this.start.x, w.y - this.start.y);
+        const r = Math.hypot(p.x - this.start.x, p.y - this.start.y);
         this._liveShape = new Konva.Circle({
           x: this.start.x, y: this.start.y, radius: r, fill: this.color,
           listening: false, globalCompositeOperation: comp,
@@ -554,21 +563,24 @@ export class FogTool extends Tool {
   onPointerUp(w) {
     if (this._drawing) {
       this._drawing = false;
-      const stroke = this.adapter.endFogStroke?.();
+      // Pass the tool's colour/size so brushed fog matches the chosen settings
+      // (shapes already used this.color; brushes used to hardcode these).
+      const stroke = this.adapter.endFogStroke?.({ color: this.color, radius: this.radius });
       if (stroke) this.sync?.send({ type: 'fog:stroke', payload: stroke });
       return;
     }
     if ((this.sub === 'rect' || this.sub === 'circle') && this.start) {
+      const p = this._s(w);
       this._liveShape?.destroy?.();
       this._liveShape = null;
       const id = 'fog_' + Math.random().toString(36).slice(2, 8);
       let shape;
       if (this.sub === 'rect') {
         shape = { id, kind: 'rect', cut: this.cut, color: this.color,
-          x: Math.min(this.start.x, w.x), y: Math.min(this.start.y, w.y),
-          w: Math.abs(w.x - this.start.x), h: Math.abs(w.y - this.start.y) };
+          x: Math.min(this.start.x, p.x), y: Math.min(this.start.y, p.y),
+          w: Math.abs(p.x - this.start.x), h: Math.abs(p.y - this.start.y) };
       } else {
-        const r = Math.hypot(w.x - this.start.x, w.y - this.start.y);
+        const r = Math.hypot(p.x - this.start.x, p.y - this.start.y);
         shape = { id, kind: 'circle', cut: this.cut, color: this.color,
           x: this.start.x, y: this.start.y, r: Math.max(4, r) };
       }

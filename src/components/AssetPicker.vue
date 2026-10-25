@@ -96,34 +96,21 @@ export default {
   },
   methods: {
     /**
-     * Open Nextcloud's file picker. Prefers the current @nextcloud/dialogs
-     * FilePickerBuilder (the legacy OC.dialogs.filepicker is deprecated and
-     * apps are flagged for it); falls back to the legacy global on older
-     * servers. Resolves to a Files path, or null when unavailable/cancelled.
+     * Open Nextcloud's file picker and resolve to a Files path, or null when
+     * unavailable/cancelled.
+     *
+     * Order matters: the LEGACY core picker is primary. Every NC 27+ server
+     * has it, and with correctly-filled args (type left to its default) it
+     * shows the Choose button — it's the same picker NC itself uses. Also,
+     * trying the modern builder first caused TWO dialogs in the field: the
+     * builder's pick() rejects on CANCEL, and the previous code treated that
+     * rejection as "modern picker unavailable" and opened the legacy dialog
+     * on top. The modern (@nextcloud/dialogs) builder is the fallback for
+     * servers that removed the legacy global.
      */
     async openPicker(title, mimes, allowDirs = false) {
-      // @nextcloud/dialogs builder — method names shifted across v5–v7
-      // (setMimeTypeFilter→addMimeTypeFilter, start()→build().pick()), so probe
-      // rather than pin one shape.
-      try {
-        const { getFilePickerBuilder } = await import('@nextcloud/dialogs');
-        let b = getFilePickerBuilder(title);
-        if (mimes?.length && typeof b.addMimeTypeFilter === 'function') {
-          for (const m of mimes) b = b.addMimeTypeFilter(m) || b;
-        } else if (mimes?.length && typeof b.setMimeTypeFilter === 'function') {
-          b = b.setMimeTypeFilter(mimes) || b;
-        }
-        if (typeof b.setMultiSelect === 'function') b = b.setMultiSelect(false) || b;
-        // allowDirectories: the builder opens directory-agnostic by default in
-        // v5–v7; nothing to force-disable, the mime filter does the narrowing.
-        const picker = typeof b.build === 'function' ? (b.build() || b) : b;
-        const opened = typeof picker.pick === 'function' ? picker.pick() : b.start();
-        const res = await opened;
-        return (Array.isArray(res) ? res[0] : res) || null;
-      } catch { /* fall through to the legacy picker */ }
-
-      return new Promise((resolve) => {
-        if (window.OC?.dialogs?.filepicker) {
+      if (window.OC?.dialogs?.filepicker) {
+        return new Promise((resolve) => {
           // Legacy signature on NC 28+ (see core/src/OC/dialogs.js):
           //   filepicker(title, callback, multiselect, mimetype, _modal,
           //              type, path, options)
@@ -144,15 +131,28 @@ export default {
             undefined, // type — default = Choose
             undefined  // path — start at the Files root
           );
-        } else if (window.OCA?.Files?.filePicker) {
-          // NC 30+ may expose via OCA.Files — try that too.
-          window.OCA.Files.filePicker(title, (path) => resolve(path), false, mimes);
-        } else {
-          // Outside Nextcloud (standalone demo): paste a URL instead.
-          const url = window.prompt('Paste a direct image/model URL:');
-          resolve(url || null);
+        });
+      }
+
+      // Fallback: the modern builder (bundled @nextcloud/dialogs). Method
+      // names shifted across v5–v7, so probe rather than pin one shape. Note
+      // pick() rejects when the user cancels — resolve null, do NOT open a
+      // second dialog.
+      try {
+        const { getFilePickerBuilder } = await import('@nextcloud/dialogs');
+        let b = getFilePickerBuilder(title);
+        if (mimes?.length && typeof b.addMimeTypeFilter === 'function') {
+          for (const m of mimes) b = b.addMimeTypeFilter(m) || b;
+        } else if (mimes?.length && typeof b.setMimeTypeFilter === 'function') {
+          b = b.setMimeTypeFilter(mimes) || b;
         }
-      });
+        if (typeof b.setMultiSelect === 'function') b = b.setMultiSelect(false) || b;
+        const picker = typeof b.build === 'function' ? (b.build() || b) : b;
+        const opened = typeof picker.pick === 'function' ? picker.pick() : b.start();
+        const res = await opened;
+        return (Array.isArray(res) ? res[0] : res) || null;
+      } catch { /* cancelled or unavailable */ }
+      return null;
     },
     /** Build a direct WebDAV download URL for a path the picker returned. */
     webdavUrl(path) {

@@ -327,19 +327,31 @@ export default {
         for (const t of doc.tokens || []) this.scene3d.upsertToken(this._migrateToken(t));
         for (const b of doc.blocks || []) this.scene3d.addBlock?.(b);
         for (const ms of doc.measurements || []) this.scene3d.addMeasurement?.(ms);
+        for (const s of doc.fog || []) {
+          if (s.tool === 'cover') this.scene3d.hideAll();
+          else if (s.kind) this.scene3d.applyFogShape?.(s);
+          else this.scene3d.applyFogStroke?.(s);
+        }
       }
     },
 
     /**
-     * Best-effort upgrade of tokens saved by the old dual-mode rooms, which
-     * stored positions in 2D stage pixels (70px per square) plus an `h` height.
-     * Native 3D tokens carry x/z world units and y = height.
+     * Best-effort upgrade of tokens saved by the old dual-mode rooms. Those
+     * saves kept positions mixed: 2D pixels in x/y (70px per square) and 3D
+     * world units in z, whichever the last save's merge produced. Native 3D
+     * tokens carry x/z world units and y = height.
      */
     _migrateToken(t) {
       if (this.mode !== '3d') return t;
       const clean = (t.url || '').split('?')[0].toLowerCase();
       const kind = t.kind || (/\.(glb|gltf)$/.test(clean) ? 'model' : 'primitive');
-      if (typeof t.z === 'number') return { ...t, kind };
+      if (typeof t.z === 'number') {
+        // Mixed old saves: x is still 2D pixels when it's implausibly large for
+        // a 40-unit table — rescale those to world units.
+        const x = Math.abs(t.x) > 50 ? t.x / 70 : t.x;
+        return { ...t, kind, x, z: t.z, y: t.y ?? t.h ?? 0 };
+      }
+      // Pure 2D-pixel legacy token.
       const g = 70;
       return { ...t, kind, x: (t.x || 0) / g, z: (t.y || 0) / g, y: t.h || 0 };
     },
@@ -462,16 +474,17 @@ export default {
       if (m.type === 'block:set') this.scene3d?.addBlock(p);
       if (m.type === 'block:remove') this.scene3d?.removeBlock(p.id);
 
-      if (m.type === 'fog:stroke') this.scene2d?.applyFogStroke(p);
-      if (m.type === 'fog:shape') this.scene2d?.applyFogShape(p);
+      if (m.type === 'fog:stroke') { this.scene2d?.applyFogStroke(p); this.scene3d?.applyFogStroke(p); }
+      if (m.type === 'fog:shape') { this.scene2d?.applyFogShape(p); this.scene3d?.applyFogShape(p); }
       if (m.type === 'fog:shape:remove') {
         const s2 = this.scene2d;
         const node = s2?.layers?.fog?.findOne?.('#' + p.id);
         if (node) { node.destroy(); s2.layers.fog.batchDraw(); }
         if (s2?.fogStrokes) s2.fogStrokes = s2.fogStrokes.filter((s) => s.id !== p.id);
+        this.scene3d?.removeFogShape?.(p.id);
       }
-      if (m.type === 'fog:clear') this.scene2d?.clearFog();
-      if (m.type === 'fog:hideall') this.scene2d?.hideAll();
+      if (m.type === 'fog:clear') { this.scene2d?.clearFog(); this.scene3d?.clearFog(); }
+      if (m.type === 'fog:hideall') { this.scene2d?.hideAll(); this.scene3d?.hideAll(); }
 
       if (m.type === 'draw:line') this.scene2d?._addLine?.(p);
       if (m.type === 'draw:shape') this.scene2d?._addShape?.(p);
@@ -581,14 +594,21 @@ export default {
     },
     onLayerToggle({ layer, on }) {
       const s2 = this.scene2d;
-      if (!s2) return; // layers are a 2D concept
-      if (layer === 'grid') s2.layers.grid.visible(on);
-      if (layer === 'drawings') s2.layers.drawings.visible(on);
-      if (layer === 'fog') s2.layers.fog.visible(on);
-      if (layer === 'fogPreview') {
-        this.tools.tools.get('fog')?.togglePreview?.();
+      if (s2) {
+        if (layer === 'grid') s2.layers.grid.visible(on);
+        if (layer === 'drawings') s2.layers.drawings.visible(on);
+        if (layer === 'fog') s2.layers.fog.visible(on);
+        if (layer === 'fogPreview') {
+          this.tools.tools.get('fog')?.togglePreview?.();
+        }
+        s2.stage.batchDraw();
+      } else {
+        // 3D rooms: the mapable layers are the fog plane (+ tools).
+        if (layer === 'fog') this.scene3d?.setFogLayerVisible?.(on);
+        if (layer === 'fogPreview') {
+          this.tools.tools.get('fog')?.togglePreview?.();
+        }
       }
-      s2.stage.batchDraw();
     },
     async onRename(name) {
       this.scene.name = name;

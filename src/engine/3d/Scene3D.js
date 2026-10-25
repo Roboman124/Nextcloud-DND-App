@@ -9,6 +9,14 @@
  * Tokens are plain data objects synced over the wire; this class turns that
  * data into meshes and keeps them in step.
  */
+
+// Fog overlay: a canvas-texture plane just above the ground plane. The stroke
+// store is shared with Scene2D's format (2D-pixel space, 70px per square,
+// centre-anchored at px (2000, 2000)).
+const FOG_RES = 1024;
+const GROUND_SIZE = 40;   // must match _buildGround's plane size
+const PX_PER_UNIT = 70;   // one grid square = 70px in the shared stroke space
+
 export class Scene3D {
   constructor({ THREE, CANNON, GLTFLoader, OrbitControls, canvas }) {
     this.THREE = THREE;
@@ -52,6 +60,9 @@ export class Scene3D {
     this.aoeShapes = new Map();
     this.blocks = new Map();  // id -> { mesh, body?, data } — map-building primitives
     this.measurements = new Map(); // id -> { line, dots } permanent rulers
+    // Fog of war (same stroke store/format as Scene2D, px space).
+    this.fogStrokes = [];
+    this._fog = null;
 
     this._buildLights();
     this._buildGround();
@@ -127,7 +138,156 @@ export class Scene3D {
       }),
       blocks: [...(this.blocks?.values() || [])].map((b) => ({ ...b.data })),
       measurements: [...this.measurements.values()].map((m) => m.data).filter(Boolean),
+      fog: this.fogStrokes.length ? this.fogStrokes : null,
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fog of war (3D). Same stroke store as Scene2D: an array of
+  // {tool:'brush'|'eraser'|'cover'|'rect'|'circle'|'polygon', points/radius/
+  // color/…} in the shared 2D-pixel stroke space (70px per grid square,
+  // anchored so ground centre (0,0) is px (2000,2000)). Rendered here as a
+  // canvas texture laid just above the ground plane.
+  // ---------------------------------------------------------------------------
+
+  /** Lazy fog overlay: canvas + CanvasTexture on a plane hugging the ground. */
+  _ensureFog() {
+    if (this._fog) return this._fog;
+    const { THREE } = this;
+    const canvas = document.createElement('canvas');
+    canvas.width = FOG_RES; canvas.height = FOG_RES;
+    const ctx = canvas.getContext('2d');
+    const tex = new THREE.CanvasTexture(canvas);
+    // Fog must render above the ground/grid but below tokens: it is the
+    // lowest overlay, so a plain renderOrder above the ground is enough.
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE), mat);
+    plane.rotation.x = -Math.PI / 2;
+    plane.position.y = 0.02;
+    plane.renderOrder = 1;
+    plane.receiveShadow = false;
+    this.scene.add(plane);
+    this._fog = { canvas, ctx, tex, plane };
+    if (this.fogStrokes.length) this._redrawFog();
+    else this._updateFogTexture();
+    return this._fog;
+  }
+
+  /** Stroke-space point (2D px, 70px/square, centre-anchored) -> canvas px. */
+  _fogCanvasX(px) { return ((px - 2000) / PX_PER_UNIT + GROUND_SIZE / 2) / GROUND_SIZE * FOG_RES; }
+
+  _updateFogTexture() {
+    if (!this._fog) return;
+    this._fog.tex.needsUpdate = true;
+  }
+
+  /** Redraw the whole fog canvas from the recorded strokes. */
+  _redrawFog() {
+    const fog = this._fog;
+    if (!fog) return;
+    const { ctx } = fog;
+    ctx.clearRect(0, 0, FOG_RES, FOG_RES);
+    for (const s of this.fogStrokes) this._drawFogStroke(s, ctx);
+    this._updateFogTexture();
+  }
+
+  /** Paint one recorded/remote stroke onto the fog canvas. */
+  _drawFogStroke(s, ctx) {
+    const scale = FOG_RES / (GROUND_SIZE * PX_PER_UNIT);  // stroke px -> canvas px
+    ctx.save();
+    if (s.tool === 'cover') {
+      // Full-map cover (the hide-all pseudo-stroke).
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = s.color || '#0a0a0a';
+      ctx.fillRect(0, 0, FOG_RES, FOG_RES);
+      ctx.restore();
+      return;
+    }
+    ctx.globalCompositeOperation = (s.cut || s.tool === 'eraser') ? 'destination-out' : 'source-over';
+    const color = s.color || '#0a0a0a';
+    if (s.kind === 'rect') {
+      ctx.fillStyle = color;
+      ctx.fillRect(this._fogCanvasX(s.x), this._fogCanvasX(s.y), (s.w || 0) * scale, (s.h || 0) * scale);
+    } else if (s.kind === 'circle') {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(this._fogCanvasX(s.x), this._fogCanvasX(s.y), Math.max(1, (s.r || 0) * scale), 0, Math.PI * 2);
+      ctx.fill();
+    } else if (s.kind === 'polygon') {
+      ctx.fillStyle = color;
+      const pts = s.points || [];
+      ctx.beginPath();
+      for (let i = 0; i + 1 < pts.length; i += 2) {
+        const cx = this._fogCanvasX(pts[i]), cy = this._fogCanvasX(pts[i + 1]);
+        if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+      }
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      // Brush / eraser: polyline with a round cap, thickness = radius.
+      ctx.lineWidth = (s.radius || 36) * scale;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = color;
+      const pts = s.points || [];
+      ctx.beginPath();
+      for (let i = 0; i + 1 < pts.length; i += 2) {
+        const cx = this._fogCanvasX(pts[i]), cy = this._fogCanvasX(pts[i + 1]);
+        if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+      }
+      if (pts.length === 2) {
+        // A single-point stroke = a dot (round cap needs a second point).
+        ctx.lineTo(this._fogCanvasX(pts[0]) + 0.01, this._fogCanvasX(pts[1]));
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // --- Fog public API (mirrors Scene2D's call shapes; no emitting — the
+  // tools/sync layer broadcasts) ---
+
+  addFogStroke(stroke) {
+    this._ensureFog();
+    this.fogStrokes.push(stroke);
+    this._redrawFog();
+    return stroke;
+  }
+
+  /** Replay a stroke from a remote client or a saved doc (no re-emit). */
+  applyFogStroke(stroke) { return this.addFogStroke(stroke); }
+
+  addFogShape(shape) { return this.addFogStroke(shape); }
+  applyFogShape(shape) { return this.addFogStroke(shape); }
+
+  removeFogShape(id) {
+    this.fogStrokes = this.fogStrokes.filter((s) => s.id !== id);
+    if (this._fog) this._redrawFog();
+  }
+
+  clearFog() {
+    this.fogStrokes = [];
+    if (this._fog) this._redrawFog();
+  }
+
+  /** GM "reveal all". */
+  revealAll() { this.clearFog(); }
+
+  /** GM "hide all" — a single full-cover pseudo-stroke keeps replays faithful. */
+  hideAll() {
+    this._ensureFog();
+    this.fogStrokes = [{ tool: 'cover', points: [], color: '#0a0a0a', radius: 0 }];
+    this._redrawFog();
+  }
+
+  setFogColor() { /* strokes record their colour; nothing global to swap */ }
+  setFogPreview() { /* the fog plane renders for everyone, as in 2D */ }
+
+  /** DM-panel layer toggle: show/hide the whole fog plane. */
+  setFogLayerVisible(on) {
+    if (this._fog) this._fog.plane.visible = !!on;
   }
 
   /**

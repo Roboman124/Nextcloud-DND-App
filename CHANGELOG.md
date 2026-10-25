@@ -4,9 +4,49 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.7.5] - 2026-10-25
+
+Three user-reported issues on the 0.7.4-era build: the file picker opening
+twice (first instance without a Choose button), 3D tokens/model clicks doing
+nothing, and fog of war not working in 3D rooms.
+
+### Fixed
+- **File picker no longer opens twice.** The modern `@nextcloud/dialogs`
+  picker was tried first and its `pick()` rejects when the user CANCELS — the
+  old code treated that as "modern picker unavailable" and opened the legacy
+  core dialog on top, so every pick showed two windows and the first had no
+  usable select affordance. The proven legacy core picker is now primary
+  (its argument fix from 0.7.4 stands), and the modern builder is only a
+  fallback for servers without the legacy global — where a cancel now simply
+  closes with no result instead of spawning a second dialog.
+- **3D tokens/models were unclickable while a model streamed in.** The 3D
+  scene now pre-registers tokens before the async glTF load (so a save mid-load
+  can't drop them), but the grab tool's picker indexed every token's mesh
+  position without a null guard — one still-loading model made the whole pick
+  call throw, breaking selection and dragging of EVERY token. Loading models
+  are now skipped until their mesh exists, and the grab radius grew slightly
+  (1.5 units) to cover a normalised model's ~2-unit footprint.
+- **Old dual-mode tokens landed off the 3D table.** Legacy saves mixed
+  coordinate spaces (x sometimes 2D pixels, z world units); tokens with
+  pixel-scale x landed far outside the 40-unit ground and could not be clicked
+  or dragged. Migration now recognises pixel-scale coordinates and rescales.
+
+### Added
+- **Fog of war works in 3D rooms.** Scene3D gained a fog overlay: a canvas
+  texture laid just above the ground plane, driven by the same FogTool and the
+  same stroke store/format as the 2D fog (brush/eraser/rect/circle/polygon,
+  cut/reveal, reveal-all/hide-all, colour). Strokes are centre-anchored in the
+  shared 2D-pixel stroke space (70px per square), so saved and remote fog
+  stays cross-compatible between room kinds. Brushed fog also honours the
+  tool's colour/size now (shapes already did; brushes used to hardcode both).
+
 ## [0.7.4] - 2026-10-25
 
-Hotfix for two user-reported issues (#both against 0.7.2/0.7.3-era builds).
+Hotfix for two user-reported issues (against the 0.7.2 appstore build).
+
+**Credit: thanks to DJ-Key for pinpointing the blank-page root cause** (the
+doubled `index.php` app path in the menu link) — that observation led to the
+router-base fix below.
 
 ### Fixed
 - **White page when opening Grimoire from the app menu; "Page not found" on
