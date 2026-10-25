@@ -58,6 +58,13 @@ class Tool {
   constructor(id, name, icon) { this.id = id; this.name = name; this.icon = icon; }
   get adapter() { return this.manager.adapter; }
   get sync() { return this.manager.sync; }
+  /** World point -> shared fog/drawing stroke space (2D px). 2D rooms: the
+   * stage pixels ARE the stroke space (identity); 3D: converts x/z. */
+  _s(w) {
+    return this.adapter._toStrokeSpace
+      ? this.adapter._toStrokeSpace(w)
+      : { x: w.x, y: w.y };
+  }
 }
 
 /**
@@ -326,23 +333,33 @@ export class DrawTool extends Tool {
   onDeactivate() { this._polyPts = null; }
   onPointerDown(w) {
     if (this.sub === 'text') {
+      const p = this._s(w);
       const text = window.prompt('Note text:');
       if (text) {
-        this.adapter.scene?._addText?.({ x: w.x, y: w.y, text, color: this.color });
-        this.sync?.send({ type: 'draw:text', payload: { x: w.x, y: w.y, text, color: this.color } });
+        this.adapter.scene?._addText?.({ x: p.x, y: p.y, text, color: this.color });
+        this.sync?.send({ type: 'draw:text', payload: { x: p.x, y: p.y, text, color: this.color } });
       }
       return;
     }
     if (this.sub === 'polygon') {
-      if (!this._polyPts) this._polyPts = [w.x, w.y];
-      else this._polyPts.push(w.x, w.y);
+      const p = this._s(w);
+      if (!this._polyPts) this._polyPts = [p.x, p.y];
+      else this._polyPts.push(p.x, p.y);
       return;
     }
-    this.start = w;
-    this.points = [w.x, w.y];
+    const p = this._s(w);
+    this.start = p;
+    this.points = [p.x, p.y];
     const Konva = this.adapter.scene?.Konva;
     const layer = this.adapter.scene?.getLayer?.('drawings');
-    if (!Konva || !layer) return;
+    if (!Konva || !layer) {
+      // 3D (or engine without a canvas drawing layer): show the in-progress
+      // stroke on the live overlay instead of Konva nodes.
+      if (this.sub === 'pen' || this.sub === 'marker') {
+        this.adapter.previewDrawing?.({ points: this.points, color: this.color, width: this.width, closed: this.sub === 'marker', fill: this.sub === 'marker' ? this.fill : undefined });
+      }
+      return;
+    }
     if (this.sub === 'pen' || this.sub === 'marker') {
       this._live = new Konva.Line({
         points: this.points, stroke: this.color, strokeWidth: this.width,
@@ -355,11 +372,20 @@ export class DrawTool extends Tool {
   }
   onPointerMove(w) {
     if (!this.start && this.sub !== 'polygon') return;
+    const p = this._s(w);
     const Konva = this.adapter.scene?.Konva;
     const layer = this.adapter.scene?.getLayer?.('drawings');
-    if (!Konva || !layer) return;
+    if (!Konva || !layer) {
+      // 3D live preview on the overlay canvas.
+      if (this.sub === 'pen' || this.sub === 'marker') {
+        if (!this.points) return;
+        this.points.push(p.x, p.y);
+        this.adapter.previewDrawing?.({ points: this.points, color: this.color, width: this.width, closed: this.sub === 'marker', fill: this.sub === 'marker' ? this.fill : undefined });
+      }
+      return;
+    }
     if ((this.sub === 'pen' || this.sub === 'marker') && this._live) {
-      this.points.push(w.x, w.y);
+      this.points.push(p.x, p.y);
       this._live.points(this.points);
       layer.batchDraw();
       return;
@@ -367,7 +393,7 @@ export class DrawTool extends Tool {
     if (this.sub === 'polygon' && this._polyPts) {
       this._live?.destroy?.();
       this._live = new Konva.Line({
-        points: [...this._polyPts, w.x, w.y], stroke: this.color, strokeWidth: this.width,
+        points: [...this._polyPts, p.x, p.y], stroke: this.color, strokeWidth: this.width,
         dash: [6, 4], listening: false,
       });
       layer.add(this._live);
@@ -375,43 +401,50 @@ export class DrawTool extends Tool {
       return;
     }
     if (['rect', 'ellipse', 'line', 'triangle', 'hexagon'].includes(this.sub)) {
-      this._live?.destroy?.();
-      const a = this.start, b = w;
+      const a = this.start, b = p;
       const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
       const rx = Math.abs(b.x - a.x) / 2, ry = Math.abs(b.y - a.y) / 2;
       const r = Math.max(rx, ry);
+      this._live?.destroy?.();
+      let data;
       if (this.sub === 'rect') {
-        this._live = new Konva.Rect({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y), stroke: this.color, strokeWidth: this.width, fill: this.fill, listening: false });
+        data = { shape: 'rect', x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y), color: this.color, width: this.width, fill: this.fill };
+        if (Konva) this._live = new Konva.Rect({ x: data.x, y: data.y, width: data.w, height: data.h, stroke: this.color, strokeWidth: this.width, fill: this.fill, listening: false });
       } else if (this.sub === 'ellipse') {
-        this._live = new Konva.Ellipse({ x: cx, y: cy, radiusX: rx, radiusY: ry, stroke: this.color, strokeWidth: this.width, fill: this.fill, listening: false });
+        data = { shape: 'ellipse', x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y), color: this.color, width: this.width, fill: this.fill };
+        if (Konva) this._live = new Konva.Ellipse({ x: cx, y: cy, radiusX: rx, radiusY: ry, stroke: this.color, strokeWidth: this.width, fill: this.fill, listening: false });
       } else if (this.sub === 'line') {
-        this._live = new Konva.Line({ points: [a.x, a.y, b.x, b.y], stroke: this.color, strokeWidth: this.width, lineCap: 'round', listening: false });
+        data = { points: [a.x, a.y, b.x, b.y], color: this.color, width: this.width };
+        if (Konva) this._live = new Konva.Line({ points: data.points, stroke: this.color, strokeWidth: this.width, lineCap: 'round', listening: false });
       } else if (this.sub === 'triangle') {
         // Equilateral-ish triangle inscribed in the drag box.
-        this._live = new Konva.Line({
-          points: [cx, Math.min(a.y, b.y), Math.max(a.x, b.x), Math.max(a.y, b.y), Math.min(a.x, b.x), Math.max(a.y, b.y)],
-          closed: true, stroke: this.color, strokeWidth: this.width, fill: this.fill, listening: false,
-        });
+        data = { shape: 'triangle', points: [cx, Math.min(a.y, b.y), Math.max(a.x, b.x), Math.max(a.y, b.y), Math.min(a.x, b.x), Math.max(a.y, b.y)], color: this.color, width: this.width, fill: this.fill };
+        if (Konva) this._live = new Konva.Line({ points: data.points, closed: true, stroke: this.color, strokeWidth: this.width, fill: this.fill, listening: false });
       } else if (this.sub === 'hexagon') {
         const pts = [];
         for (let i = 0; i < 6; i++) {
           const ang = (Math.PI / 3) * i;
           pts.push(cx + r * Math.cos(ang), cy + r * Math.sin(ang));
         }
-        this._live = new Konva.Line({ points: pts, closed: true, stroke: this.color, strokeWidth: this.width, fill: this.fill, listening: false });
+        data = { shape: 'hexagon', points: pts, color: this.color, width: this.width, fill: this.fill };
+        if (Konva) this._live = new Konva.Line({ points: pts, closed: true, stroke: this.color, strokeWidth: this.width, fill: this.fill, listening: false });
       }
-      layer.add(this._live);
-      layer.batchDraw();
+      if (Konva && this._live) { layer.add(this._live); layer.batchDraw(); }
+      else if (!Konva && data) {
+        // 3D: render the forming shape on the live overlay.
+        this.adapter.previewDrawing?.(data.shape ? data : { points: data.points, color: this.color, width: this.width });
+      }
     }
   }
   onPointerUp(w) {
     if (this.sub === 'polygon') return; // closed on double-click
     if (!this.start) return;
-    const a = this.start, b = w;
+    const a = this.start, b = this._s(w);
     const Konva = this.adapter.scene?.Konva;
     const layer = this.adapter.scene?.getLayer?.('drawings');
     this._live?.destroy?.();
     this._live = null;
+    this.adapter.clearDrawingPreview?.();
     if (this.sub === 'pen') {
       if (this.points.length >= 4) {
         this.adapter.scene?._addLine?.({ points: this.points, color: this.color, width: this.width });
@@ -494,13 +527,6 @@ export class FogTool extends Tool {
   }
   onActivate() { this._polyPts = null; }
   onDeactivate() { this._polyPts = null; this.adapter.scene?.setFogPreview?.(false); this.preview = false; }
-  /** World point -> shared fog stroke space (2D px). 2D: identity — the
-   * adapter's stage pixels ARE the stroke space; 3D: converts x/z. */
-  _s(w) {
-    return this.adapter._toStrokeSpace
-      ? this.adapter._toStrokeSpace(w)
-      : { x: w.x, y: w.y };
-  }
   onPointerDown(w) {
     if (this.sub === 'brush' || this.sub === 'eraser') {
       this.adapter.beginFogStroke?.(w, this.sub === 'eraser' ? 'eraser' : 'brush');

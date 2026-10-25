@@ -320,11 +320,25 @@ export class Scene3DAdapter {
     const p = this._toStrokeSpace(w);
     this._fogTool = tool;
     this._fogPoints = [p.x, p.y];
+    // Live preview on the scene's overlay canvas so strokes appear while
+    // dragging, not only on release.
+    this.scene.previewDrawing?.({
+      points: this._fogPoints,
+      color: tool === 'eraser' ? '#0a0a0a' : '#0a0a0a',
+      width: 36,
+      comp: tool === 'eraser' ? 'destination-out' : undefined,
+    });
   }
   extendFogStroke(w) {
     if (!this._fogPoints) return;
     const p = this._toStrokeSpace(w);
     this._fogPoints.push(p.x, p.y);
+    this.scene.previewDrawing?.({
+      points: this._fogPoints,
+      color: '#0a0a0a',
+      width: 36,
+      comp: this._fogTool === 'eraser' ? 'destination-out' : undefined,
+    });
   }
   endFogStroke(overrides = {}) {
     if (!this._fogPoints) return null;

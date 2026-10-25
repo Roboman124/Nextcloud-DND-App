@@ -63,6 +63,10 @@ export class Scene3D {
     // Fog of war (same stroke store/format as Scene2D, px space).
     this.fogStrokes = [];
     this._fog = null;
+    // Drawings layer (same store/format as Scene2D) + the live preview overlay.
+    this._drawings = [];
+    this._draw = null;
+    this._live = null;
 
     this._buildLights();
     this._buildGround();
@@ -139,6 +143,7 @@ export class Scene3D {
       blocks: [...(this.blocks?.values() || [])].map((b) => ({ ...b.data })),
       measurements: [...this.measurements.values()].map((m) => m.data).filter(Boolean),
       fog: this.fogStrokes.length ? this.fogStrokes : null,
+      drawings: this._drawings.length ? this._drawings.slice() : null,
     };
   }
 
@@ -169,18 +174,18 @@ export class Scene3D {
     plane.renderOrder = 1;
     plane.receiveShadow = false;
     this.scene.add(plane);
-    this._fog = { canvas, ctx, tex, plane };
+    this._fog = { canvas, ctx, tex, plane, dirty: false };
     if (this.fogStrokes.length) this._redrawFog();
-    else this._updateFogTexture();
+    else this._markDirty(this._fog);
     return this._fog;
   }
 
   /** Stroke-space point (2D px, 70px/square, centre-anchored) -> canvas px. */
-  _fogCanvasX(px) { return ((px - 2000) / PX_PER_UNIT + GROUND_SIZE / 2) / GROUND_SIZE * FOG_RES; }
+  _pxToCanvas(px) { return ((px - 2000) / PX_PER_UNIT + GROUND_SIZE / 2) / GROUND_SIZE * FOG_RES; }
 
-  _updateFogTexture() {
-    if (!this._fog) return;
-    this._fog.tex.needsUpdate = true;
+  /** Mark a layer's texture dirty; render() uploads at most once per frame. */
+  _markDirty(layer) {
+    if (layer) layer.dirty = true;
   }
 
   /** Redraw the whole fog canvas from the recorded strokes. */
@@ -190,7 +195,7 @@ export class Scene3D {
     const { ctx } = fog;
     ctx.clearRect(0, 0, FOG_RES, FOG_RES);
     for (const s of this.fogStrokes) this._drawFogStroke(s, ctx);
-    this._updateFogTexture();
+    this._markDirty(fog);
   }
 
   /** Paint one recorded/remote stroke onto the fog canvas. */
@@ -209,18 +214,18 @@ export class Scene3D {
     const color = s.color || '#0a0a0a';
     if (s.kind === 'rect') {
       ctx.fillStyle = color;
-      ctx.fillRect(this._fogCanvasX(s.x), this._fogCanvasX(s.y), (s.w || 0) * scale, (s.h || 0) * scale);
+      ctx.fillRect(this._pxToCanvas(s.x), this._pxToCanvas(s.y), (s.w || 0) * scale, (s.h || 0) * scale);
     } else if (s.kind === 'circle') {
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(this._fogCanvasX(s.x), this._fogCanvasX(s.y), Math.max(1, (s.r || 0) * scale), 0, Math.PI * 2);
+      ctx.arc(this._pxToCanvas(s.x), this._pxToCanvas(s.y), Math.max(1, (s.r || 0) * scale), 0, Math.PI * 2);
       ctx.fill();
     } else if (s.kind === 'polygon') {
       ctx.fillStyle = color;
       const pts = s.points || [];
       ctx.beginPath();
       for (let i = 0; i + 1 < pts.length; i += 2) {
-        const cx = this._fogCanvasX(pts[i]), cy = this._fogCanvasX(pts[i + 1]);
+        const cx = this._pxToCanvas(pts[i]), cy = this._pxToCanvas(pts[i + 1]);
         if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
       }
       ctx.closePath();
@@ -234,12 +239,12 @@ export class Scene3D {
       const pts = s.points || [];
       ctx.beginPath();
       for (let i = 0; i + 1 < pts.length; i += 2) {
-        const cx = this._fogCanvasX(pts[i]), cy = this._fogCanvasX(pts[i + 1]);
+        const cx = this._pxToCanvas(pts[i]), cy = this._pxToCanvas(pts[i + 1]);
         if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
       }
       if (pts.length === 2) {
         // A single-point stroke = a dot (round cap needs a second point).
-        ctx.lineTo(this._fogCanvasX(pts[0]) + 0.01, this._fogCanvasX(pts[1]));
+        ctx.lineTo(this._pxToCanvas(pts[0]) + 0.01, this._pxToCanvas(pts[1]));
       }
       ctx.stroke();
     }
@@ -288,6 +293,147 @@ export class Scene3D {
   /** DM-panel layer toggle: show/hide the whole fog plane. */
   setFogLayerVisible(on) {
     if (this._fog) this._fog.plane.visible = !!on;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Drawings layer (3D): freehand + shapes painted on a canvas above the fog,
+  // stored in the same shared px-space format as Scene2D's drawings so saves,
+  // replays and the wire protocol stay compatible.
+  // ---------------------------------------------------------------------------
+
+  _ensureDraw() {
+    if (this._draw) return this._draw;
+    const { THREE } = this;
+    const layer = this._makeOverlayPlane(0.035, 2);
+    this._draw = layer;
+    if (this._drawings.length) this._redrawDrawings();
+    return layer;
+  }
+
+  /** Live in-progress overlay (drawings/fog pencil), cleared on commit. */
+  _ensureLive() {
+    if (this._live) return this._live;
+    this._live = this._makeOverlayPlane(0.05, 3);
+    return this._live;
+  }
+
+  _makeOverlayPlane(y, renderOrder) {
+    const { THREE } = this;
+    const canvas = document.createElement('canvas');
+    canvas.width = FOG_RES; canvas.height = FOG_RES;
+    const ctx = canvas.getContext('2d');
+    const tex = new THREE.CanvasTexture(canvas);
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE), mat);
+    plane.rotation.x = -Math.PI / 2;
+    plane.position.y = y;
+    plane.renderOrder = renderOrder;
+    this.scene.add(plane);
+    return { canvas, ctx, tex, plane, dirty: false };
+  }
+
+  _redrawDrawings() {
+    const layer = this._draw;
+    if (!layer) return;
+    const { ctx } = layer;
+    ctx.clearRect(0, 0, FOG_RES, FOG_RES);
+    for (const d of this._drawings) this._paintStroke(d, ctx);
+    this._markDirty(layer);
+  }
+
+  /** Commit a drawing (tool commit or remote replay; the caller syncs). */
+  _addLine(d) { return this._commitDrawing(d); }
+  _addShape(d) { return this._commitDrawing(d); }
+
+  /** Plain canvas text note. Not synced as rich text (see draw:text). */
+  _addText({ x, y, text, color = '#f0e6cc', size = 18 }) {
+    if (!text) return;
+    this._ensureDraw();
+    const d = { x, y, text, color, size };
+    this._drawings.push(d);
+    const { ctx } = this._draw;
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.font = `bold ${Math.max(8, (size || 18) * (FOG_RES / (GROUND_SIZE * PX_PER_UNIT)))}px system-ui, sans-serif`;
+    ctx.shadowColor = 'rgba(0,0,0,.8)';
+    ctx.shadowBlur = 3;
+    ctx.fillText(text, this._pxToCanvas(d.x), this._pxToCanvas(d.y));
+    ctx.restore();
+    this._markDirty(this._draw);
+    return d;
+  }
+  _commitDrawing(d) {
+    this._ensureDraw();
+    this._drawings.push(d);
+    this._redrawDrawings();
+    this.clearDrawingPreview();
+    return d;
+  }
+
+  /** Render an in-progress stroke on the live overlay (kept until commit). */
+  previewDrawing(data) {
+    const live = this._ensureLive();
+    live.ctx.clearRect(0, 0, FOG_RES, FOG_RES);
+    if (data) this._paintStroke(data, live.ctx);
+    this._markDirty(live);
+  }
+
+  clearDrawingPreview() {
+    if (!this._live) return;
+    this._live.ctx.clearRect(0, 0, FOG_RES, FOG_RES);
+    this._markDirty(this._live);
+  }
+
+  /** Paint one drawing payload (line/shape/text/marker/…) in stroke space. */
+  _paintStroke(d, ctx) {
+    if (d.text !== undefined) {
+      ctx.save();
+      ctx.fillStyle = d.color || '#f0e6cc';
+      ctx.font = `bold ${Math.max(8, (d.size || 18) * (FOG_RES / (GROUND_SIZE * PX_PER_UNIT)))}px system-ui, sans-serif`;
+      ctx.shadowColor = 'rgba(0,0,0,.8)';
+      ctx.shadowBlur = 3;
+      ctx.fillText(d.text, this._pxToCanvas(d.x), this._pxToCanvas(d.y));
+      ctx.restore();
+      return;
+    }
+    if (d.points) {
+      // Line / polygon-ish strokes: polyline (closed when the payload implies).
+      ctx.save();
+      if (d.comp) ctx.globalCompositeOperation = d.comp;
+      ctx.strokeStyle = d.color || '#e0c068';
+      ctx.lineWidth = Math.max(1, (d.width || 4) * (FOG_RES / (GROUND_SIZE * PX_PER_UNIT)));
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      const pts = d.points || [];
+      ctx.beginPath();
+      for (let i = 0; i + 1 < pts.length; i += 2) {
+        const cx = this._pxToCanvas(pts[i]), cy = this._pxToCanvas(pts[i + 1]);
+        if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+      }
+      if (d.shape && d.shape !== 'line') ctx.closePath();
+      if ((d.fill && d.fill !== 'transparent')) { ctx.fillStyle = d.fill; ctx.fill(); }
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+    // Rect / ellipse payload ({shape, x, y, w, h}).
+    if (d.shape === 'rect' || d.shape === 'ellipse') {
+      ctx.save();
+      ctx.strokeStyle = d.color || '#e0c068';
+      ctx.lineWidth = Math.max(1, (d.width || 4) * (FOG_RES / (GROUND_SIZE * PX_PER_UNIT)));
+      if (d.fill && d.fill !== 'transparent') { ctx.fillStyle = d.fill; }
+      const X = this._pxToCanvas(d.x), Y = this._pxToCanvas(d.y);
+      const W = (d.w || 0) * (FOG_RES / (GROUND_SIZE * PX_PER_UNIT));
+      const H = (d.h || 0) * (FOG_RES / (GROUND_SIZE * PX_PER_UNIT));
+      ctx.beginPath();
+      if (d.shape === 'rect') ctx.rect(X, Y, W, H);
+      else ctx.ellipse(X + W / 2, Y + H / 2, Math.max(1, W / 2), Math.max(1, H / 2), 0, 0, Math.PI * 2);
+      if (d.fill && d.fill !== 'transparent') ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   /**
@@ -577,6 +723,11 @@ export class Scene3D {
     const dt = this._clock.getDelta();
     this.world.step(1 / 60, dt, 3);
     if (this.controls) this.controls.update();
+    // Upload overlay textures at most once per frame — without this, live
+    // fog/pencil strokes triggered a full texture re-upload per mouse-move.
+    for (const layer of [this._fog, this._draw, this._live]) {
+      if (layer?.dirty) { layer.tex.needsUpdate = true; layer.dirty = false; }
+    }
     this.renderer.render(this.scene, this.camera);
     return dt;
   }

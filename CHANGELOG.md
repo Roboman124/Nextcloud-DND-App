@@ -4,6 +4,35 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.7.6] - 2026-10-25
+
+The d10 die was geometrically wrong, 3D fog only appeared on mouse release and
+stuttered, and the draw tool was inert in 3D rooms.
+
+### Fixed — dice
+- **d10 rebuilt as a true pentagonal trapezohedron.** The old construction was
+  built with n=10 (a twenty-faced decagonal solid whose 0–9 values cycled
+  across 20 faces, several doubled and mislabelled) and placed labels far off
+  the faces. The new builder is exact: two apices, a 2n ring staggered between
+  heights ±e, and the kite faces are provably planar for the exact stagger
+  e = h(1−cos(π/n))/(1+cos(π/n)) — verified numerically (10 faces, each with an
+  exact antipodal face, opposite values pairing to 0+9…4+5, labels sitting on
+  the surface).
+
+### Fixed — 3D drawing & fog feel
+- **Strokes preview live in 3D.** Fog brushes and the pencil now draw while you
+  drag onto a live overlay canvas, instead of appearing only after the left
+  button released.
+- **Laggy fog gone.** Overlay textures upload at most once per frame via a
+  dirty flag (a live stroke used to trigger a full 1024² texture re-upload per
+  mouse-move); committed strokes redraw the canvas incrementally.
+- **The draw tool works in 3D rooms.** Scene3D gained a drawings layer
+  (pen/marker freehand, line/rect/ellipse/triangle/hexagon, polygon, and plain
+  text notes) over the ground, in the same shared pixel stroke space and
+  message formats as 2D — saves and live sync carry both room kinds' drawings.
+- Rich text notes anchor and project correctly in 3D rooms (camera projection
+  instead of the 2D stage transform).
+
 ## [0.7.5] - 2026-10-25
 
 Three user-reported issues on the 0.7.4-era build: the file picker opening

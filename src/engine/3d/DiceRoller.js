@@ -307,13 +307,16 @@ function buildDie(type, THREE, CANNON) {
     }
     case 'd10':
     default: {
-      // d10 is a pentagonal trapezohedron: two pentagonal pyramids base-to-
-      // base, rotated 36° relative to each other. Build it with a lathe so the
-      // geometry is a real 10-faced die, not an icosa approximation.
-      geometry = buildTrapezohedronGeometry(10, size, THREE);
-      // Values 0-9 (or 1-10); opposite faces sum to 9 (0+9, 1+8, ...).
+      // d10 is a PENTAGONAL trapezohedron: 2 apices + 10 kite faces
+      // (n=5 → 2n kites). Calling the builder with n=10 previously produced
+      // a twenty-faced decagonal solid whose values cycled wrong — the
+      // malformed, mislabelled die seen in the field.
+      geometry = buildTrapezohedronGeometry(5, size, THREE);
+      // Values 0-9 (a d10's 0 reads as a 10); opposite faces sum to 9.
       faceMap = calibratedFaces(geometry, THREE, range(0, 9), 9);
-      faceRadius = 0.88;
+      // Kite faces sit ~0.47·size from the centre; labels placed at 0.88
+      // hovered well off the die.
+      faceRadius = size * 0.5;
       labelSize = 0.42;
       break;
     }
@@ -444,35 +447,44 @@ function calibratedFaces(geometry, THREE, values, maxPlus1) {
 }
 
 /**
- * Build an n-gonal trapezohedron (the d10 shape) as a lathe-style solid: two
- * congruent n-gonal pyramids joined base-to-base, rotated half a step. Each
- * face is a kite. Returns a non-indexed BufferGeometry with 2n triangular faces.
+ * Build an n-gonal trapezohedron (the d10 shape for n=5): two apices at ±h
+ * and 2n ring vertices zigzagging between heights ±e, one ring set at the
+ * n-fold angles and the other rotated half a step. Every face is a kite
+ * (apex, T_i, B_i, T_{i+1}); the kites are exactly planar when the stagger
+ * satisfies e = h·(1 − cos(π/n)) / (1 + cos(π/n)) — which is what makes the
+ * face reading (clustering coplanar tris by normal) robust.
  */
 function buildTrapezohedronGeometry(n, size, THREE) {
-  // Apex top, apex bottom, and a ring of 2n vertices around the equator
-  // alternating between the two pyramids' base edges.
-  const h = size * 0.9;          // half-height (apex to equator)
-  const r = size * 0.62;         // equator radius
-  const rInner = r * 0.78;       // alternating inner ring for kite faces
-  const verts = [];
+  const h = size * 0.9;            // apex height from centre
+  const r = size * 0.62;           // ring radius (the widest girth)
+  const e = h * (1 - Math.cos(Math.PI / n)) / (1 + Math.cos(Math.PI / n));
   const top = [0, h, 0];
   const bottom = [0, -h, 0];
 
-  // Build 2n equator vertices: alternate outer/inner so faces are kites.
-  const ring = [];
-  for (let i = 0; i < 2 * n; i++) {
-    const a = (i / (2 * n)) * Math.PI * 2;
-    const rr = (i % 2 === 0) ? r : rInner;
-    // Stagger inner ring by half a step so the kite edges line up.
-    const aa = (i % 2 === 1) ? a + Math.PI / n : a;
-    ring.push([Math.cos(aa) * rr, 0, Math.sin(aa) * rr]);
+  const upper = [], lower = [];
+  for (let i = 0; i < n; i++) {
+    const aU = (i / n) * Math.PI * 2;
+    const aL = aU + Math.PI / n;   // lower verts rotated half a step
+    upper.push([Math.cos(aU) * r, e, Math.sin(aU) * r]);
+    lower.push([Math.cos(aL) * r, -e, Math.sin(aL) * r]);
   }
 
-  // Faces: top cap triangles (top -> ring[i], ring[i+1]) and bottom cap.
-  for (let i = 0; i < 2 * n; i++) {
-    const j = (i + 1) % (2 * n);
-    verts.push(...top, ...ring[i], ...ring[j]);
-    verts.push(...bottom, ...ring[j], ...ring[i]);
+  const verts = [];
+  const pushQuad = (a, b, c, d) => {
+    // Two triangles wound so the face normal points away from the origin.
+    const mid = [(a[0]+b[0]+c[0]+d[0]) / 4, (a[1]+b[1]+c[1]+d[1]) / 4, (a[2]+b[2]+c[2]+d[2]) / 4];
+    const u1 = [b[0]-a[0], b[1]-a[1], b[2]-a[2]];
+    const u2 = [c[0]-a[0], c[1]-a[1], c[2]-a[2]];
+    const nrm = [u1[1]*u2[2]-u1[2]*u2[1], u1[2]*u2[0]-u1[0]*u2[2], u1[0]*u2[1]-u1[1]*u2[0]];
+    if (nrm[0]*mid[0] + nrm[1]*mid[1] + nrm[2]*mid[2] < 0) {
+      [b, c] = [c, b];  // inward normal — flip the winding
+    }
+    verts.push(...a, ...b, ...c, ...a, ...c, ...d);
+  };
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    pushQuad(top, upper[i], lower[i], upper[j]);      // upper kite
+    pushQuad(bottom, lower[i], upper[j], lower[j]);   // lower kite (mirror)
   }
 
   const geo = new THREE.BufferGeometry();

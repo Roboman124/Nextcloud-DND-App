@@ -332,6 +332,13 @@ export default {
           else if (s.kind) this.scene3d.applyFogShape?.(s);
           else this.scene3d.applyFogStroke?.(s);
         }
+        for (const d of doc.drawings || []) {
+          if (d.text && d.html) this.richTexts.push({ ...d });
+          else if (d.text) this.scene3d._addText?.(d);
+          else if (d.points) this.scene3d._addLine?.(d);
+          else if (d.shape) this.scene3d._addShape?.(d);
+        }
+        this.projectRichTexts();
       }
     },
 
@@ -486,16 +493,17 @@ export default {
       if (m.type === 'fog:clear') { this.scene2d?.clearFog(); this.scene3d?.clearFog(); }
       if (m.type === 'fog:hideall') { this.scene2d?.hideAll(); this.scene3d?.hideAll(); }
 
-      if (m.type === 'draw:line') this.scene2d?._addLine?.(p);
-      if (m.type === 'draw:shape') this.scene2d?._addShape?.(p);
+      if (m.type === 'draw:line') { this.scene2d?._addLine?.(p); this.scene3d?._addLine?.(p); }
+      if (m.type === 'draw:shape') { this.scene2d?._addShape?.(p); this.scene3d?._addShape?.(p); }
       if (m.type === 'draw:text') {
         if (p.html) {
           // Rich text overlay (HTML).
           if (!this.richTexts.some((r) => r.id === p.id)) this.richTexts.push({ ...p });
           this.projectRichTexts();
         } else {
-          // Plain Konva text (legacy / from older clients).
+          // Plain text note (legacy / from older clients).
           this.scene2d?._addText?.(p);
+          this.scene3d?._addText?.(p);
         }
       }
 
@@ -883,23 +891,44 @@ export default {
     onTextCommit({ html, text }) {
       const id = 'text_' + Date.now();
       const w = this._textWorld || { x: 0, y: 0 };
-      const rt = { id, x: w.x, y: w.y, html, text, color: this.drawColor };
+      // Store the note in the shared draw space (2D px, 70px per square,
+      // centre-anchored in 3D) so saves and remote clients agree.
+      const p = this.mode === '3d'
+        ? { x: w.x * 70 + 2000, y: (w.z ?? 0) * 70 + 2000 }
+        : { x: w.x, y: w.y };
+      const rt = { id, ...p, html, text, color: this.drawColor };
       this.richTexts.push(rt);
       this.projectRichTexts();
       this.sync?.send({ type: 'draw:text', payload: rt });
       this.textEditor = null;
     },
 
-    /** Project world coords of rich text overlays to screen each frame. */
+    /** Project rich text overlay anchors to screen each frame. */
     projectRichTexts() {
-      if (this.mode !== '2d') return;
-      const stage = this.scene2d.stage;
-      const tr = stage.getAbsoluteTransform();
-      const rect = stage.container().getBoundingClientRect();
-      for (const rt of this.richTexts) {
-        const p = tr.point({ x: rt.x, y: rt.y });
-        rt.screenX = rect.left + p.x;
-        rt.screenY = rect.top + p.y;
+      if (this.mode === '2d') {
+        const stage = this.scene2d.stage;
+        const tr = stage.getAbsoluteTransform();
+        const rect = stage.container().getBoundingClientRect();
+        for (const rt of this.richTexts) {
+          const p = tr.point({ x: rt.x, y: rt.y });
+          rt.screenX = rect.left + p.x;
+          rt.screenY = rect.top + p.y;
+        }
+        return;
+      }
+      if (this.mode === '3d' && this.scene3d) {
+        // 3D: anchor the note on the ground where it was drawn (world unit
+        // = (px − 2000) / 70) and project it through the camera.
+        const camera = this.scene3d.camera;
+        const canvas = this.scene3d.renderer?.domElement;
+        if (!camera || !canvas) return;
+        const v = new this.THREE.Vector3();
+        const rect = canvas.getBoundingClientRect();
+        for (const rt of this.richTexts) {
+          v.set((rt.x - 2000) / 70, 0.9, (rt.y - 2000) / 70).project(camera);
+          rt.screenX = rect.left + (v.x * 0.5 + 0.5) * rect.width;
+          rt.screenY = rect.top + (-v.y * 0.5 + 0.5) * rect.height;
+        }
       }
     },
   },
