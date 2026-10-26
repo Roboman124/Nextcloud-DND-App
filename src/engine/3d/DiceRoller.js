@@ -215,6 +215,32 @@ export class DiceRoller {
           d.body.velocity.set(0, 0, 0);
           d.body.angularVelocity.set(0, 0, 0);
         }
+        // Canonical settle pose: align the die's most-downward face to
+        // exactly down. The solver can leave a tetra (or d10) resting on a
+        // tilted/edge contact that reads as "not a real die" — real dice
+        // settle flat with the apex up; this makes every settled die crisp.
+        if (shape.faceNormals?.length) {
+          let worst = null, worstDot = Infinity;
+          for (const n of shape.faceNormals) {
+            const w = d.body.quaternion.vmult(n);
+            if (w.y < worstDot) { worstDot = w.y; worst = w; }
+          }
+          if (worst) {
+            const delta = new CANNON.Quaternion();
+            delta.setFromVectors(worst, new CANNON.Vec3(0, -1, 0));
+            d.body.quaternion = delta.mult(d.body.quaternion);
+            // Re-run the flush lift: the alignment can change the lowest point.
+            let lowest2 = Infinity;
+            for (const v of shape.vertices) {
+              const t = d.body.quaternion.vmult(v);
+              const y = d.body.position.y + t.y;
+              if (y < lowest2) lowest2 = y;
+            }
+            if (lowest2 < 0) d.body.position.y -= lowest2;
+          }
+        }
+        // Lock the snapped pose.
+        d.body.sleep();
       }
       const results = this.dice.map((d) => ({
         type: d.type,
@@ -580,8 +606,9 @@ function addD4Labels(mesh, geometry, values, labelSize, THREE) {
       const { n, tri } = face;
       const centroid = tri.reduce((acc, c) => acc.add(c.p), new THREE.Vector3()).divideScalar(3);
       // Corner number: sit just inside the face from the corner, text-up
-      // pointing away from the corner (reads upright at the settle corner).
-      const pos = vert.p.clone().lerp(centroid, 0.30)
+      // pointing away from the corner (reads upright at the settle corner) —
+      // close to the edge and big, like a physical d4.
+      const pos = vert.p.clone().lerp(centroid, 0.36)
         .add(n.clone().multiplyScalar(0.015)); // lift slightly off the face
       const up = centroid.clone().sub(vert.p).normalize();
       makeLabel(String(valueOf.get(vert.p)), labelSize, pos, n, up, THREE, mesh);

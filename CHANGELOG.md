@@ -6,9 +6,18 @@ semantic versioning.
 
 ## [0.7.9] - 2026-10-26
 
-Dice physics/render fixes found by testing 0.7.8 in the field.
+Dice physics/render fixes found by testing 0.7.8 in the field. (Repackaged
+in place after field-testing caught the d4's rest pose — see below.)
 
 ### Fixed
+- **Settled dice now rest like real dice.** The physics solver can stop a die
+  mid-tilt (a tetra balancing on an edge/vertex contact) which read as "not a
+  d4 at all" — and it leaves a small allowed penetration at rest (the d4 sank
+  ~4% of its size — the "clips into the floor" look). On settle each die's
+  most-downward face is rotated to exactly flat (apex straight up for the d4,
+  crisp kites for the d10), residual sink is lifted out, and the pose is
+  locked by sleeping the body. The result read runs on the snapped pose, so
+  what you see and what is reported always agree.
 - **The d10's "wedge"/"no faces" and leaning rest.** The trapezohedron's
   winding fix flipped only the FIRST triangle of each quad, leaving the other
   half of the kite faces wound inward. Consequences: cannon-es rejected those
@@ -18,10 +27,12 @@ Dice physics/render fixes found by testing 0.7.8 in the field.
   half-missing "boat" wedge. The flip now reverses the entire quad cycle;
   verified numerically: no cannon warnings, the die sleeps after settling, and
   all faces render.
-- **Dice sat slightly buried in the table.** The physics solver leaves a
-  small allowed penetration at rest (the d4 sank ~4% of its size — the
-  "clips into the floor" look). On settle, dice are now lifted so their
-  lowest vertex touches the floor exactly.
+- **Dice result view jumps back after ~half a second.** The camera goal was
+  dropped the moment it was reached, so the zoom snapped back to the overview
+  immediately. The zoom now HOLDS until the next roll.
+- **Only one die showed when several rolled.** The result camera now cycles
+  through every resting die (~2.5s each, wrapping around) until the next roll.
+- **d4 numbers bigger and edge-adjacent** to read like a physical d4.
 - **Striped/shadow-acne faces.** The main light self-shadowed dice at ~0.04
   units/texel, rendering dark diagonal stripes across faces ("texture
   issues"). Shadow bias + normalBias added.
