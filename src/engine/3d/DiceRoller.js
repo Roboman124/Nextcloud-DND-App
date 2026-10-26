@@ -198,6 +198,24 @@ export class DiceRoller {
 
     if (settled) {
       this._settled = true;
+      // Snap residual floor penetration out so dice rest flush: the solver
+      // leaves a small allowed sink (a few % of the die) that reads as the
+      // die "clipping into the floor".
+      for (const d of this.dice) {
+        const shape = d.body.shapes[0];
+        if (!shape?.vertices) continue;
+        let lowest = Infinity;
+        for (const v of shape.vertices) {
+          const t = d.body.quaternion.vmult(v);
+          const y = d.body.position.y + t.y;
+          if (y < lowest) lowest = y;
+        }
+        if (lowest < 0) {
+          d.body.position.y -= lowest;
+          d.body.velocity.set(0, 0, 0);
+          d.body.angularVelocity.set(0, 0, 0);
+        }
+      }
       const results = this.dice.map((d) => ({
         type: d.type,
         value: d.faceValue(d.body.quaternion, this.THREE),
@@ -488,7 +506,11 @@ function buildTrapezohedronGeometry(n, size, THREE) {
     const u2 = [c[0]-a[0], c[1]-a[1], c[2]-a[2]];
     const nrm = [u1[1]*u2[2]-u1[2]*u2[1], u1[2]*u2[0]-u1[0]*u2[2], u1[0]*u2[1]-u1[1]*u2[0]];
     if (nrm[0]*mid[0] + nrm[1]*mid[1] + nrm[2]*mid[2] < 0) {
-      [b, c] = [c, b];  // inward normal — flip the winding
+      // Inward — reverse the ENTIRE quad cycle (a,b,c,d)→(a,d,c,b). Flipping
+      // only the first triangle left the second wound inward, and cannon-es
+      // then rejected half the faces as "pointing into the shape" (the die
+      // could only rest on half its faces and never went to sleep).
+      [b, c, d] = [d, c, b];
     }
     verts.push(...a, ...b, ...c, ...a, ...c, ...d);
   };

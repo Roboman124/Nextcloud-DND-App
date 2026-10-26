@@ -4,6 +4,28 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.7.9] - 2026-10-26
+
+Dice physics/render fixes found by testing 0.7.8 in the field.
+
+### Fixed
+- **The d10's "wedge"/"no faces" and leaning rest.** The trapezohedron's
+  winding fix flipped only the FIRST triangle of each quad, leaving the other
+  half of the kite faces wound inward. Consequences: cannon-es rejected those
+  faces as pointing into the shape (the die could only rest on half of them,
+  leaned/jittered and never went to sleep so rolls idled to the ~6s timeout),
+  and the renderer BACKFACE-CULLED the inverted faces — the die looked like a
+  half-missing "boat" wedge. The flip now reverses the entire quad cycle;
+  verified numerically: no cannon warnings, the die sleeps after settling, and
+  all faces render.
+- **Dice sat slightly buried in the table.** The physics solver leaves a
+  small allowed penetration at rest (the d4 sank ~4% of its size — the
+  "clips into the floor" look). On settle, dice are now lifted so their
+  lowest vertex touches the floor exactly.
+- **Striped/shadow-acne faces.** The main light self-shadowed dice at ~0.04
+  units/texel, rendering dark diagonal stripes across faces ("texture
+  issues"). Shadow bias + normalBias added.
+
 ## [0.7.8] - 2026-10-26
 
 Dice render fixes completing the 0.7.7 batch (kept 0.7.7's published tag

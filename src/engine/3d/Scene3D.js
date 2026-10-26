@@ -98,6 +98,11 @@ export class Scene3D {
     key.shadow.camera.right = 40;
     key.shadow.camera.top = 40;
     key.shadow.camera.bottom = -40;
+    // Kill self-shadow striping on dice and small models: at this shadow-map
+    // texel density (~0.04 units/texel) unbiased self-shadowing renders as
+    // dark diagonal stripes across the die faces.
+    key.shadow.bias = -0.0004;
+    key.shadow.normalBias = 0.03;
     this.scene.add(key);
     const fill = new THREE.HemisphereLight(0x556699, 0x221a10, 0.4);
     this.scene.add(fill);
