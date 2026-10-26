@@ -4,16 +4,22 @@
       <span class="dp-toggle-icon">🎲</span>
       <span v-if="!open" class="dp-badge" v-show="lastResult">{{ lastResult }}</span>
     </button>
-    <div v-if="open" class="dp-body">
-      <header class="dp-header">
-        <h3>Dice</h3>
-        <button class="dp-close" @click="open = false">✕</button>
-      </header>
 
-      <!-- 3D viewport: in 2D mode this shows a mini 3D render; in 3D mode it's hidden (dice roll in the main scene) -->
-      <div v-if="mode === '2d'" class="dp-viewport-wrap">
+    <!-- The column: viewport card + controls body. The viewport lives OUTSIDE
+         the collapsible body's v-if and hides with v-show instead: collapsing
+         must NOT unmount the canvas, or re-opening remounts a fresh canvas
+         the renderer no longer draws into (an empty viewport that never
+         spawns again — the "platform sometimes doesn't exist" bug). -->
+    <div class="dp-stack">
+      <div v-if="mode === '2d'" class="dp-viewport-wrap" v-show="open">
         <canvas ref="canvas" class="dp-canvas"></canvas>
       </div>
+
+      <div v-if="open" class="dp-body">
+        <header class="dp-header">
+          <h3>Dice</h3>
+          <button class="dp-close" @click="open = false">✕</button>
+        </header>
 
       <!-- Dice picker -->
       <div class="dp-pick">
@@ -44,7 +50,8 @@
         <span class="dp-total">{{ remote.total }}</span>
         <span class="dp-breakdown">{{ remoteBreakdown }}</span>
       </div>
-    </div>
+      </div><!-- /dp-body -->
+    </div><!-- /dp-stack -->
   </aside>
 </template>
 
@@ -98,6 +105,13 @@ export default {
     mode: { immediate: true, handler() { this.syncRoller(); } },
     roller: { immediate: true, handler() { this.syncRoller(); } },
     open(v) { if (v && this.mode === '2d') this.$nextTick(() => this.ensureScene()); },
+  },
+  mounted() {
+    // The panel may START open (startOpen) — the `open` watcher above only
+    // fires on a CHANGE, so a room that boots with the tray open never
+    // created its dice viewport: the 2D view showed an empty panel ("the
+    // platform will not spawn at all") until the user toggled the tray.
+    if (this.mode === '2d' && this.open) this.$nextTick(() => this.ensureScene());
   },
   methods: {
     syncRoller() {
@@ -190,7 +204,12 @@ export default {
     async _initScene() {
       const THREE = await import('three');
       const CANNON = await import('cannon-es');
-      const canvas = this.$refs.canvas;
+      let canvas = this.$refs.canvas;
+      if (!canvas) {
+        // One retry after the tick — the canvas may not be mounted yet.
+        await this.$nextTick();
+        canvas = this.$refs.canvas;
+      }
       if (!canvas) return;
       const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -277,8 +296,14 @@ export default {
   position: absolute; top: -4px; right: -4px; background: var(--g-primary); color: var(--g-primary-t);
   font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 6px; min-width: 18px; text-align: center;
 }
+.dp-stack { display: flex; flex-direction: column; height: 100%; }
+.dp-viewport-wrap {
+  width: 280px; margin: 14px 14px 0 0; background: var(--g-bg-dark);
+  border: 1px solid var(--g-border); border-radius: var(--g-radius-large);
+  overflow: hidden; box-shadow: var(--g-shadow);
+}
 .dp-body {
-  width: 280px; height: calc(100% - 28px); margin: 14px 14px 14px 0;
+  width: 280px; flex: 1; min-height: 0; margin: 8px 14px 14px 0;
   background: var(--g-bg-dark); border: 1px solid var(--g-border);
   border-radius: var(--g-radius-large); overflow: hidden;
   display: flex; flex-direction: column; box-shadow: var(--g-shadow);
@@ -287,8 +312,7 @@ export default {
 .dp-header h3 { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; color: var(--g-primary); }
 .dp-close { background: none; border: none; color: var(--g-text-dim); cursor: pointer; font-size: 14px; }
 .dp-close:hover { color: var(--g-text); }
-.dp-viewport-wrap { background: #0a0805; }
-.dp-canvas { width: 100%; height: 180px; display: block; }
+.dp-canvas { width: 100%; height: 180px; display: block; background: #0a0805; }
 .dp-pick { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 14px 8px; }
 .dp-chip {
   font: inherit; font-size: 12px; font-weight: 700;
