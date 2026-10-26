@@ -122,7 +122,7 @@ export class DiceRoller {
 
   _spawnDie(type, color, rng) {
     const { THREE, CANNON } = this;
-    const { geometry, shape, faceValue, scale, faceMap, faceRadius, labelSize } = buildDie(type, THREE, CANNON);
+    const { geometry, shape, faceValue, scale, faceMap, faceRadius, labelSize, labelMode } = buildDie(type, THREE, CANNON);
 
     const mat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(color),
@@ -140,7 +140,8 @@ export class DiceRoller {
       new THREE.LineBasicMaterial({ color: 0x111111 })
     );
     mesh.add(edges);
-    addFaceLabels(mesh, faceMap, faceRadius, labelSize, THREE);
+    if (labelMode === 'd4') addD4Labels(mesh, geometry, labelValues, labelSize, THREE);
+    else addFaceLabels(mesh, faceMap, faceRadius, labelSize, THREE);
 
     const body = new CANNON.Body({
       mass: 1,
@@ -258,6 +259,7 @@ function makeRng(seed) {
 function buildDie(type, THREE, CANNON) {
   const size = 1.1;
   let geometry, faceMap;
+  let labelMode = null, labelValues = null;
 
   let faceRadius, labelSize;
 
@@ -273,18 +275,27 @@ function buildDie(type, THREE, CANNON) {
       labelSize = 0.65;
       break;
     }
-    case 'd4':
+    case 'd4': {
+      // A real d4 is VERTEX-numbered: it rests on a face and the result is
+      // read at the TOP vertex — all three surrounding faces print that
+      // vertex's value at its corner, so it's legible from any side (numbers
+      // sit along the edges like a physical die, not the face centre where a
+      // settled d4's upright face is only seen edge-on).
       geometry = new THREE.TetrahedronGeometry(size * 1.1);
-      faceMap = facesFromGeometry(geometry, THREE, [1, 2, 3, 4], true);
-      faceRadius = 0.38;
-      labelSize = 0.52;
+      labelValues = [1, 2, 3, 4];
+      faceMap = d4VertexMap(geometry, THREE, labelValues); // {n: vertexDir, v} ×4
+      labelMode = 'd4';   // corner numbers ×3 per face (edge-adjacent)
+      faceRadius = 0.40;  // (unused for corner labels; kept for parity)
+      labelSize = 0.34;
       break;
+    }
     case 'd8': {
       geometry = new THREE.OctahedronGeometry(size);
-      // Octahedron has 8 faces. Canonical d8: opposite faces sum to 9.
-      // The octahedron's faces come in 4 opposite pairs along the ±x±y±z
-      // diagonals. Assign values so each pair sums to 9.
-      faceMap = calibratedFaces(geometry, THREE, [1, 8, 2, 7, 3, 6, 4, 5], 9);
+      // Canonical d8: opposite faces sum to 9. The values array holds the
+      // FIRST half (1..4); calibratedFaces pairs each with (9 − v) for the
+      // opposite face. Passing the full list made every value appear twice
+      // and half of them never appear (the duplicated-face bug).
+      faceMap = calibratedFaces(geometry, THREE, [1, 2, 3, 4], 9);
       faceRadius = 0.65;
       labelSize = 0.5;
       break;
@@ -324,7 +335,7 @@ function buildDie(type, THREE, CANNON) {
 
   const shape = shapeFromGeometry(geometry, THREE, CANNON);
   const faceValue = makeFaceReader(faceMap, THREE);
-  return { geometry, shape, faceValue, scale: size, faceMap, faceRadius, labelSize };
+  return { geometry, shape, faceValue, scale: size, faceMap, faceRadius, labelSize, labelMode, labelValues };
 }
 
 function range(a, b) {
@@ -493,7 +504,68 @@ function buildTrapezohedronGeometry(n, size, THREE) {
   return geo;
 }
 
-/** Returns reader(quaternion) -> value: the face whose world normal points up. */
+/**
+ * d4 helpers. A tetrahedron has no opposite faces; real d4s number the
+ * VERTICES. The reader treats each vertex's direction-from-centre as a "face
+ * normal" (the settled die's top vertex points straight up), and the labels
+ * are drawn three-per-face at the corners so every reading angle shows the
+ * top value.
+ */
+
+/** The die's 4 unique vertices as unit directions + per-corner face triples. */
+function d4VertexData(geometry, THREE) {
+  const g = geometry.index ? geometry.toNonIndexed() : geometry;
+  const pos = g.attributes.position;
+  const verts = new Map(); // "x,y,z" -> { p: Vector3, faces: [] }
+  for (let i = 0; i < pos.count; i += 3) {
+    const tri = [];
+    for (let j = 0; j < 3; j++) {
+      const x = +pos.getX(i + j).toFixed(4);
+      const y = +pos.getY(i + j).toFixed(4);
+      const z = +pos.getZ(i + j).toFixed(4);
+      const key = `${x},${y},${z}`;
+      let v = verts.get(key);
+      if (!v) {
+        v = { p: new THREE.Vector3(x, y, z), faces: [] };
+        verts.set(key, v);
+      }
+      tri.push(v);
+    }
+    // Register this tri against each of its corners.
+    const a = new THREE.Vector3();
+    const v0 = tri[0].p, v1 = tri[1].p, v2 = tri[2].p;
+    a.copy(v1).sub(v0);
+    a.cross(new THREE.Vector3().copy(v2).sub(v0)).normalize();
+    const out = v0.clone().add(v1).add(v2).divideScalar(3);
+    if (a.dot(out) < 0) a.negate(); // outward
+    for (const corner of tri) corner.faces.push({ n: a.clone(), tri });
+  }
+  return [...verts.values()].map((v) => ({ dir: v.p.clone().normalize(), p: v.p, faces: v.faces }));
+}
+
+/** Vertex-indexed face map for the d4 reader: the up-most vertex wins. */
+function d4VertexMap(geometry, THREE, values) {
+  const data = d4VertexData(geometry, THREE);
+  return data.map((v, i) => ({ n: [v.dir.x, v.dir.y, v.dir.z], v: values[i % values.length] }));
+}
+
+/** Three edge-adjacent numbers per face, oriented like a physical d4. */
+function addD4Labels(mesh, geometry, values, labelSize, THREE) {
+  const data = d4VertexData(geometry, THREE);
+  const valueOf = new Map(data.map((v, i) => [v.p, values[i % values.length]]));
+  for (const vert of data) {
+    for (const face of vert.faces) {
+      const { n, tri } = face;
+      const centroid = tri.reduce((acc, c) => acc.add(c.p), new THREE.Vector3()).divideScalar(3);
+      // Corner number: sit just inside the face from the corner, text-up
+      // pointing away from the corner (reads upright at the settle corner).
+      const pos = vert.p.clone().lerp(centroid, 0.30)
+        .add(n.clone().multiplyScalar(0.015)); // lift slightly off the face
+      const up = centroid.clone().sub(vert.p).normalize();
+      makeLabel(String(valueOf.get(vert.p)), labelSize, pos, n, up, THREE, mesh);
+    }
+  }
+}
 function makeFaceReader(faceMap, THREE) {
   const up = new THREE.Vector3(0, 1, 0);
   const tmp = new THREE.Vector3();
@@ -515,41 +587,67 @@ function makeFaceReader(faceMap, THREE) {
  * PlaneGeometry child whose +Z axis is aligned with the face outward normal,
  * so the number sits flush on the surface and tumbles with the die.
  */
+/**
+ * Face label with a CANONICAL in-face orientation: the number's up-direction
+ * is the die's local up projected into the face plane (real dice print along
+ * face edges, so a settled face reads upright from the side instead of at an
+ * arbitrary, sometimes upside-down, twist). Falls back to another axis when
+ * the projected direction degenerates (e.g. the d6's top face, whose normal
+ * IS the local up).
+ */
+function orientLabel(plane, n, upHint, THREE) {
+  const z = n.clone().normalize();
+  let y = upHint.clone().sub(z.clone().multiplyScalar(upHint.dot(z)));
+  if (y.length() < 1e-4) y = new THREE.Vector3(0, 0, 1).sub(z.clone().multiplyScalar(z.z));
+  if (y.length() < 1e-4) y = new THREE.Vector3(1, 0, 0).sub(z.clone().multiplyScalar(z.x));
+  y.normalize();
+  const x = new THREE.Vector3().crossVectors(y, z);
+  plane.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+}
+
+/** One number label (ivory circle on a small plane). Shared by all dice. */
+function makeLabel(text, labelSize, pos, n, up, THREE, mesh) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+
+  // Ivory circle background.
+  ctx.beginPath();
+  ctx.arc(64, 64, 56, 0, Math.PI * 2);
+  ctx.fillStyle = '#f5f0e0';
+  ctx.fill();
+
+  // Dark number.
+  ctx.fillStyle = '#1a1308';
+  ctx.font = `bold ${text.length >= 2 ? 54 : 68}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 64, 66);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.generateMipmaps = false;
+  tex.minFilter = THREE.LinearFilter;
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(labelSize, labelSize), mat);
+  plane.position.copy(pos);
+  orientLabel(plane, n, up || n, THREE);
+  mesh.add(plane);
+}
+
+/** Face-centred labels for d6/d8/d12/d20 — canonical orientation. */
 function addFaceLabels(mesh, faceMap, faceRadius, labelSize, THREE) {
-  const zAxis = new THREE.Vector3(0, 0, 1);
+  const up = new THREE.Vector3(0, 1, 0);
   for (const face of faceMap) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 128;
-    canvas.height = 128;
-    const ctx = canvas.getContext('2d');
-
-    // Ivory circle background.
-    ctx.beginPath();
-    ctx.arc(64, 64, 56, 0, Math.PI * 2);
-    ctx.fillStyle = '#f5f0e0';
-    ctx.fill();
-
-    // Dark number.
-    ctx.fillStyle = '#1a1308';
-    ctx.font = `bold ${face.v >= 10 ? 54 : 68}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(String(face.v), 64, 66);
-
-    const tex = new THREE.CanvasTexture(canvas);
-    const mat = new THREE.MeshBasicMaterial({
-      map: tex,
-      transparent: true,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2,
-    });
-    const plane = new THREE.Mesh(new THREE.PlaneGeometry(labelSize, labelSize), mat);
     const n = new THREE.Vector3(face.n[0], face.n[1], face.n[2]);
-    plane.position.copy(n.clone().multiplyScalar(faceRadius));
-    plane.quaternion.setFromUnitVectors(zAxis, n);
-    mesh.add(plane);
+    makeLabel(String(face.v), labelSize, n.clone().multiplyScalar(faceRadius), n, up, THREE, mesh);
   }
 }
 

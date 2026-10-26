@@ -4,6 +4,31 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.7.8] - 2026-10-26
+
+Dice render fixes completing the 0.7.7 batch (kept 0.7.7's published tag
+intact; deploy 0.7.8 to get the whole batch).
+
+### Fixed
+- **d4 is a real, vertex-numbered d4.** It rests on a face and the result is
+  read at the TOP vertex (its direction points straight up when settled —
+  verified numerically for all four settle states). Each face now prints
+  THREE numbers near its edges — the value of each of its corners — exactly
+  like a physical d4, so the result is legible from any viewing angle (the
+  old face-centre labels were invisible when the upright face was seen
+  edge-on, which is why numbers appeared only "from afar").
+- **d8 face map had duplicated values.** The calibration call passed the
+  FULL canonical list ([1,8,2,7,3,6,4,5]) where the pairing helper expects
+  only the first half: pairs were built as (1→8), then (8→1), (2→7), then
+  (7→2) — every value used twice, and 3/4/5/6 never appeared. Fixed to
+  [1,2,3,4]; opposites now correctly sum to 9 with all eight values present.
+- **Face labels no longer land at arbitrary, upside-down twists.** Label
+  orientation is now canonical per face (the die's local up projected into
+  the face plane, with a degeneracy fallback), shared by every die type —
+  mirrored in the field as numbers reading "9" for a flipped "6", and the
+  d10/d8 screenshots showing upside-down digits.
+- Label textures skip mipmap generation (minor spawn-cost win).
+
 ## [0.7.7] - 2026-10-26
 
 Roster visibility, 3D drag feel, snap correctness, and a readable dice result.
