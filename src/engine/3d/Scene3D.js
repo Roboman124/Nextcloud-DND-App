@@ -67,10 +67,24 @@ export class Scene3D {
     this._drawings = [];
     this._draw = null;
     this._live = null;
+    this._liveSid = null;   // identity of the in-progress live stroke
+    this._livePtN = 0;      // how many stroke-space points are already inked
 
     this._buildLights();
     this._buildGround();
     this._clock = new THREE.Clock();
+  }
+
+  /** Texture settings for the per-frame-updated overlay canvases: NO
+   * mipmap rebuilds (the expensive part of a canvas-texture upload — every
+   * live stroke was regenerating the full mipmap chain per mouse-move). */
+  _overlayTexture(canvas) {
+    const { THREE } = this;
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.generateMipmaps = false;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    return tex;
   }
 
   _buildLights() {
@@ -162,7 +176,7 @@ export class Scene3D {
     const canvas = document.createElement('canvas');
     canvas.width = FOG_RES; canvas.height = FOG_RES;
     const ctx = canvas.getContext('2d');
-    const tex = new THREE.CanvasTexture(canvas);
+    const tex = this._overlayTexture(canvas);
     // Fog must render above the ground/grid but below tokens: it is the
     // lowest overlay, so a plain renderOrder above the ground is enough.
     const mat = new THREE.MeshBasicMaterial({
@@ -322,7 +336,7 @@ export class Scene3D {
     const canvas = document.createElement('canvas');
     canvas.width = FOG_RES; canvas.height = FOG_RES;
     const ctx = canvas.getContext('2d');
-    const tex = new THREE.CanvasTexture(canvas);
+    const tex = this._overlayTexture(canvas);
     const mat = new THREE.MeshBasicMaterial({
       map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide,
     });
@@ -372,17 +386,48 @@ export class Scene3D {
     return d;
   }
 
-  /** Render an in-progress stroke on the live overlay (kept until commit). */
-  previewDrawing(data) {
+  /**
+   * Render an in-progress stroke on the live overlay (kept until commit).
+   * Pass a stable `sid` for a growing polyline (freehand pen, fog brush) and
+   * only the NEW segment is inked each call — repainting the whole polyline
+   * per mouse-move was the remaining drag-lag cost.
+   */
+  previewDrawing(data, sid = null) {
     const live = this._ensureLive();
-    live.ctx.clearRect(0, 0, FOG_RES, FOG_RES);
-    if (data) this._paintStroke(data, live.ctx);
+    const ctx = live.ctx;
+    const pts = data && data.points;
+    const growable = pts && sid && pts.length >= 4;
+    if (growable && sid === this._liveSid && pts.length > this._livePtN) {
+      // Incremental: stroke the new tail onto the existing ink.
+      ctx.save();
+      if (data.comp) ctx.globalCompositeOperation = data.comp;
+      ctx.strokeStyle = data.color || '#e0c068';
+      ctx.lineWidth = Math.max(1, (data.width || 4) * (FOG_RES / (GROUND_SIZE * PX_PER_UNIT)));
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(this._pxToCanvas(pts[this._livePtN - 2]), this._pxToCanvas(pts[this._livePtN - 1]));
+      for (let i = this._livePtN; i + 1 < pts.length; i += 2) {
+        ctx.lineTo(this._pxToCanvas(pts[i]), this._pxToCanvas(pts[i + 1]));
+      }
+      ctx.stroke();
+      ctx.restore();
+      this._livePtN = pts.length;
+    } else {
+      // New stroke (or a shape whose geometry changes per move): repaint.
+      ctx.clearRect(0, 0, FOG_RES, FOG_RES);
+      if (data) this._paintStroke(data, ctx);
+      this._liveSid = sid;
+      this._livePtN = pts ? pts.length : 0;
+    }
     this._markDirty(live);
   }
 
   clearDrawingPreview() {
     if (!this._live) return;
     this._live.ctx.clearRect(0, 0, FOG_RES, FOG_RES);
+    this._liveSid = null;
+    this._livePtN = 0;
     this._markDirty(this._live);
   }
 

@@ -125,9 +125,14 @@ export default {
       this.display = 'rolling…'; this.total = '';
       const r = this.mode === '3d' ? this.roller : this.viewportRoller;
       if (!r) return;
+      this._camGoal = null; // zoom back out for the new toss
       r.rollAsync(spec).then((results) => this.showResults(results));
     },
     showResults(results, emit = true) {
+      // rollAsync resolves with the same array the settle handler received —
+      // skip the duplicate so results display (and broadcast) exactly once.
+      if (results === this._lastResults) return;
+      this._lastResults = results;
       const sum = results.reduce((s, x) => s + (x.value || 0), 0);
       this.total = String(sum);
       this.display = results.map((x) => `${x.type}:${x.value}`).join('  ');
@@ -135,6 +140,37 @@ export default {
       if (emit) {
         // The private 2D roller has no other sync path — broadcast it.
         this.$emit('roll', { rolls: results, total: sum, notation: results.map((r) => r.type).join(' + ') });
+      }
+      // Zoom the 2D viewport in on the resting dice so the numbers are
+      // readable (Owlbear's dice-tray behaviour).
+      if (this.viewportRoller) this._zoomToDice();
+    },
+    /** Frame the settled dice with a short camera move. */
+    _zoomToDice() {
+      const dice = this.viewportRoller?.dice || [];
+      if (!dice.length || !this.THREE) return;
+      const c = new this.THREE.Vector3();
+      for (const d of dice) c.add(d.mesh.position);
+      c.multiplyScalar(1 / dice.length);
+      let radius = 1.4;
+      for (const d of dice) {
+        radius = Math.max(radius, d.mesh.position.distanceTo(c) + 1.1);
+      }
+      const dist = radius * 2.42; // frame within a 45° vertical fov
+      this._camGoal = {
+        pos: new this.THREE.Vector3(c.x, c.y + 0.62 * dist, c.z + 0.78 * dist),
+        look: new this.THREE.Vector3(c.x, c.y + 0.6, c.z),
+      };
+    },
+    /** Ease the viewport camera toward its goal (or the overview). */
+    _easeCamera() {
+      if (!this.camera) return;
+      if (this._camGoal) {
+        this.camera.position.lerp(this._camGoal.pos, 0.14);
+        this.camera.lookAt(this._camGoal.look);
+        if (this.camera.position.distanceTo(this._camGoal.pos) < 0.05) this._camGoal = null;
+      } else if (this._camBase) {
+        this.camera.position.lerp(this._camBase, 0.08);
       }
     },
     // --- 2D mode: private 3D scene ---
@@ -170,6 +206,8 @@ export default {
       world.broadphase = new CANNON.SAPBroadphase(world); world.allowSleep = true;
       this.THREE = THREE; this.renderer = renderer;
       this.scene3d = scene; this.camera = camera; this.world = world;
+      this._camBase = camera.position.clone(); // overview pose for resets
+      this._camGoal = null;
       this.viewportRoller = new DiceRoller({
         THREE, CANNON, scene, world,
         onSettle: (r) => this.showResults(r),
@@ -197,6 +235,7 @@ export default {
       const dt = 1 / 60;
       this.world.step(1 / 60, dt, 3);
       this.viewportRoller.step(dt);
+      this._easeCamera();
       this.renderer.render(this.scene3d, this.camera);
       this._raf = requestAnimationFrame(this._loop);
     },

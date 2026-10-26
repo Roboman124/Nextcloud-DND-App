@@ -324,20 +324,36 @@ export default {
     async addPlayer(campaign, user) {
       const uid = typeof user === 'string' ? user : user.uid;
       const name = typeof user === 'string' ? user : (user.displayName || user.uid);
-      const cd = this.campaignData[campaign.id];
-      if (!cd.players.includes(uid)) cd.players.push(uid);
       this.inviteSearch[campaign.id] = '';
       this.userResults[campaign.id] = [];
-      await this._saveCampaignData(campaign);
-      await this.loadRoster(campaign.id);
-      this.flash(campaign.id, `${name} added to the campaign.`, true);
+      try {
+        // The players endpoint owns the roster: server-side validation +
+        // invite email in ONE write, and it returns the updated roster so
+        // the list below is what the server actually has. (The previous
+        // client-side "push into the campaign blob then PUT everything"
+        // pattern saved the roster through the fragile update() path, where
+        // a body-binding miss silently dropped it — players then never
+        // appeared in the roster list and couldn't be removed.)
+        const { data } = await axios.put(this.api(`/campaigns/${campaign.id}/players`), { add: uid });
+        await this.loadRoster(campaign.id);
+        const inRoster = (this.roster[campaign.id] || []).some((p) => p.uid === uid);
+        if (inRoster) {
+          this.flash(campaign.id, `${name} added to the campaign; invitation emailed.`, true);
+        } else {
+          this.flash(campaign.id, `${name} added, but the roster list didn't refresh — reopen Manage.`, false);
+        }
+      } catch (e) {
+        this.flash(campaign.id, e?.response?.data?.error || `Failed to add ${name}.`, false);
+      }
     },
 
     async removePlayer(campaign, uid) {
-      const cd = this.campaignData[campaign.id];
-      cd.players = cd.players.filter((u) => u !== uid);
-      await this._saveCampaignData(campaign);
-      await this.loadRoster(campaign.id);
+      try {
+        await axios.put(this.api(`/campaigns/${campaign.id}/players`), { remove: uid });
+        await this.loadRoster(campaign.id);
+      } catch (e) {
+        this.flash(campaign.id, e?.response?.data?.error || 'Failed to remove that player.', false);
+      }
     },
 
     /** Load the roster (display names + email availability) for a campaign. */

@@ -75,12 +75,25 @@ class CampaignController extends OCSController {
     }
 
     #[NoAdminRequired]
-    public function update(int $id, string $title, string $description = '', ?string $data = null): JSONResponse {
+    public function update(int $id, string $title = '', string $description = '', ?string $data = null): JSONResponse {
         $c = $this->ownedOr404($id);
         if ($c instanceof JSONResponse) return $c;
-        $c->setTitle($title);
+
+        // PUT body params have proved unreliable on some setups (the invite
+        // saga): if the framework didn't bind them, recover from the raw
+        // request body so a save can't silently drop the players list.
+        if ($title === '' && $data === null) {
+            $raw = json_decode((string) file_get_contents('php://input'), true);
+            if (is_array($raw)) {
+                if (isset($raw['title']) && is_scalar($raw['title'])) $title = (string) $raw['title'];
+                if (isset($raw['description']) && is_scalar($raw['description'])) $description = (string) $raw['description'];
+                if (isset($raw['data'])) $data = (string) $raw['data'];
+            }
+        }
+
+        if ($title !== '') $c->setTitle($title);
         $c->setDescription($description);
-        if ($data !== null) {
+        if ($data !== null && $data !== '') {
             // Preserve any server-only Discord webhook URL: the browser never
             // receives it (see sanitize()), so an incoming update would
             // otherwise wipe it. Merge the existing secret back in.

@@ -100,24 +100,48 @@ export class PointerTool extends Tool {
 export class GrabTool extends Tool {
   constructor() { super('grab', 'Grab', 'hand'); }
   onActivate() { this.adapter.setTokensDraggable?.(true); }
-  onDeactivate() { this.adapter.setTokensDraggable?.(false); this.selected = null; }
+  onDeactivate() { this.adapter.setTokensDraggable?.(false); this.selected = null; this._grabOff = null; }
   onPointerDown(w) {
     const hit = this.adapter.pickToken?.(w);
     this.selected = hit || null;
-    if (hit) this.adapter.highlightToken?.(hit.id);
+    if (hit) {
+      this.adapter.highlightToken?.(hit.id);
+      // Keep the grab-point offset: moving a token to the raw cursor point
+      // teleports its anchor under the cursor (which reads as "snapping to
+      // middle spots" in free-move and fights Konva's own drag in 2D).
+      this._grabOff = {
+        x: (hit.x ?? w.x) - w.x,
+        // Depth axis: 2D world points use y, 3D uses z.
+        dy: w.y !== undefined ? (hit.y ?? w.y) - w.y : 0,
+        dz: w.z !== undefined ? (hit.z ?? w.z) - w.z : 0,
+      };
+    }
   }
   onPointerMove(w) {
     if (!this.selected) return;
-    this.adapter.moveToken?.(this.selected.id, w);
+    this.adapter.moveToken?.(this.selected.id, this._grabPoint(w));
   }
   onPointerUp(w) {
     if (!this.selected) return;
-    // Snap only when the adapter has snapping enabled (toggleable in the UI).
+    // Snap only when the adapter has snapping enabled (toggleable in the UI);
+    // snap the token's anchor (offset-adjusted), not the cursor.
+    const raw = this._grabPoint(w);
     const useSnap = this.adapter.snapEnabled !== false;
-    const dest = useSnap ? (this.adapter.snapToGrid?.(w) || w) : w;
+    const dest = useSnap ? (this.adapter.snapToGrid?.(raw) || raw) : raw;
     this.adapter.moveToken?.(this.selected.id, dest);
     this.sync?.send({ type: 'token:move', payload: { id: this.selected.id, ...dest } });
     this.selected = null;
+    this._grabOff = null;
+  }
+  /** World point with the grab offset applied (both axes present so either
+   * mode's adapter can read its own). */
+  _grabPoint(w) {
+    if (!this._grabOff) return w;
+    return {
+      x: w.x + this._grabOff.x,
+      y: w.y !== undefined ? w.y + this._grabOff.dy : undefined,
+      z: w.z !== undefined ? w.z + this._grabOff.dz : undefined,
+    };
   }
 }
 
@@ -187,17 +211,36 @@ export class MeasureTool extends Tool {
       // Pick a token to drag with a live ruler.
       const hit = this.adapter.pickToken?.(w);
       this._moving = hit || null;
+      if (hit) {
+        // Keep the grab-point offset so the token doesn't jump its anchor to
+        // the cursor when the drag starts (same fix as GrabTool).
+        this._movingOff = {
+          x: (hit.x ?? w.x) - w.x,
+          dy: w.y !== undefined ? (hit.y ?? w.y) - w.y : 0,
+          dz: w.z !== undefined ? (hit.z ?? w.z) - w.z : 0,
+        };
+      }
       this.start = w;
       return;
     }
     this.start = w;
   }
+  /** Movement drag: world point with the grab offset applied. */
+  _movePoint(w) {
+    if (!this._movingOff) return w;
+    return {
+      x: w.x + this._movingOff.x,
+      y: w.y !== undefined ? w.y + this._movingOff.dy : undefined,
+      z: w.z !== undefined ? w.z + this._movingOff.dz : undefined,
+    };
+  }
   onPointerMove(w) {
     if (!this.start) return;
     if (this.mode === 'movement' && this._moving) {
-      this.adapter.moveToken?.(this._moving.id, w);
-      const sq = this._squares(this.start, w);
-      this.adapter.showMeasurement(this.start, w, this._format(sq));
+      const p = this._movePoint(w);
+      this.adapter.moveToken?.(this._moving.id, p);
+      const sq = this._squares(this.start, p);
+      this.adapter.showMeasurement(this.start, p, this._format(sq));
       return;
     }
     const sq = this._squares(this.start, w);
@@ -206,12 +249,14 @@ export class MeasureTool extends Tool {
   onPointerUp(w) {
     if (this.mode === 'movement') {
       if (this._moving) {
+        const raw = this._movePoint(w);
         const useSnap = this.adapter.snapEnabled !== false;
-        const dest = useSnap ? (this.adapter.snapToGrid?.(w) || w) : w;
+        const dest = useSnap ? (this.adapter.snapToGrid?.(raw) || raw) : raw;
         this.adapter.moveToken?.(this._moving.id, dest);
         this.sync?.send({ type: 'token:move', payload: { id: this._moving.id, ...dest } });
       }
       this._moving = null;
+      this._movingOff = null;
       this.start = null;
       this.adapter.clearMeasurement();
       return;
@@ -356,7 +401,8 @@ export class DrawTool extends Tool {
       // 3D (or engine without a canvas drawing layer): show the in-progress
       // stroke on the live overlay instead of Konva nodes.
       if (this.sub === 'pen' || this.sub === 'marker') {
-        this.adapter.previewDrawing?.({ points: this.points, color: this.color, width: this.width, closed: this.sub === 'marker', fill: this.sub === 'marker' ? this.fill : undefined });
+        this._sid = 'pen_' + Math.random().toString(36).slice(2, 8);
+        this.adapter.previewDrawing?.({ points: this.points, color: this.color, width: this.width, closed: this.sub === 'marker', fill: this.sub === 'marker' ? this.fill : undefined }, this._sid);
       }
       return;
     }
@@ -376,11 +422,11 @@ export class DrawTool extends Tool {
     const Konva = this.adapter.scene?.Konva;
     const layer = this.adapter.scene?.getLayer?.('drawings');
     if (!Konva || !layer) {
-      // 3D live preview on the overlay canvas.
+      // 3D live preview on the overlay canvas — incremental for freehand.
       if (this.sub === 'pen' || this.sub === 'marker') {
         if (!this.points) return;
         this.points.push(p.x, p.y);
-        this.adapter.previewDrawing?.({ points: this.points, color: this.color, width: this.width, closed: this.sub === 'marker', fill: this.sub === 'marker' ? this.fill : undefined });
+        this.adapter.previewDrawing?.({ points: this.points, color: this.color, width: this.width, closed: this.sub === 'marker', fill: this.sub === 'marker' ? this.fill : undefined }, this._sid);
       }
       return;
     }

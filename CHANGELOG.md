@@ -4,6 +4,38 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.7.7] - 2026-10-26
+
+Roster visibility, 3D drag feel, snap correctness, and a readable dice result.
+
+### Fixed
+- **Invited players now actually show up in the roster.** The Manage panel's
+  `addPlayer` still walked the fragile path: push the user into a local
+  players array, then save the campaign's ENTIRE data blob back through
+  `update()` — and flashed "added" no matter what the server did. A body
+  binding miss meant the invite silently failed while the UI claimed success:
+  no roster entry, nothing to remove. Invites now go through the dedicated
+  `players` endpoint (server-side validation + email, raw-body fallback) and
+  the panel reloads the server's roster afterwards, reporting real success.
+  `CampaignController::update` also lost its required `title` param and gained
+  the raw-body fallback, so session-time saves can't fail silently either.
+- **3D drawing drag-lag.** Overlay canvas textures were rebuilding their whole
+  mipmap chain on every frame-while-dragging (CanvasTexture's expensive hidden
+  cost); overlay textures are now mipmap-free with linear filtering. Long
+  freehand strokes additionally ink INCREMENTALLY on the live overlay (only
+  the newest segment per move) instead of repainting the whole polyline.
+- **Free-move still "snapping", sometimes to middle spots.** The grab tool
+  moved tokens to the raw cursor point: the token's anchor teleported to
+  wherever you happened to grab it (reads as snapping into odd spots, and
+  fought Konva's own drag in 2D). Both the grab tool and the measure tool's
+  movement mode now record the grab-point offset at pickup and move the token
+  ANCHOR — snap then aligns the token, not the cursor.
+- **2D dice tray zooms to the result.** After the dice settle, the private
+  2D viewport eases in to frame the resting dice so the face numbers are
+  readable; the next roll zooms back out. Also fixed a duplicate
+  display/broadcast when a roll's settle callback ran twice (added an
+  identity guard).
+
 ## [0.7.6] - 2026-10-25
 
 The d10 die was geometrically wrong, 3D fog only appeared on mouse release and

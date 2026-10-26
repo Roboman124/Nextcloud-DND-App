@@ -123,7 +123,10 @@ export class Scene2DAdapter {
       // centred on the group origin with a half-size pad either way.
       if (w.x >= gx - size * 0.1 && w.x <= gx + size &&
           w.y >= gy - size * 0.1 && w.y <= gy + size) {
-        return { id };
+        // Include the token's current position so GrabTool can keep the
+        // grab-point offset (moving to the raw cursor point teleports the
+        // token's anchor to under the cursor).
+        return { id, x: gx, y: gy };
       }
     }
     return null;
@@ -292,9 +295,9 @@ export class Scene3DAdapter {
       // Grab radius scales with the token's footprint (~1.5 unit default;
       // models sit inside a ~2-unit footprint after load normalisation).
       const radius = Math.max(1.5, (e.data.size || 1) * 1.5);
-      if (d <= radius && d < bestDist) { bestDist = d; best = id; }
+      if (d <= radius && d < bestDist) { bestDist = d; best = { id, x: p.x, z: p.z }; }
     }
-    return best ? { id: best } : null;
+    return best;
   }
   moveToken(id, w) {
     const e = this.scene.tokens.get(id);
@@ -320,14 +323,15 @@ export class Scene3DAdapter {
     const p = this._toStrokeSpace(w);
     this._fogTool = tool;
     this._fogPoints = [p.x, p.y];
+    this._fogSid = 'fog_' + Math.random().toString(36).slice(2, 8);
     // Live preview on the scene's overlay canvas so strokes appear while
     // dragging, not only on release.
     this.scene.previewDrawing?.({
       points: this._fogPoints,
-      color: tool === 'eraser' ? '#0a0a0a' : '#0a0a0a',
+      color: '#0a0a0a',
       width: 36,
       comp: tool === 'eraser' ? 'destination-out' : undefined,
-    });
+    }, this._fogSid);
   }
   extendFogStroke(w) {
     if (!this._fogPoints) return;
@@ -338,7 +342,7 @@ export class Scene3DAdapter {
       color: '#0a0a0a',
       width: 36,
       comp: this._fogTool === 'eraser' ? 'destination-out' : undefined,
-    });
+    }, this._fogSid);
   }
   endFogStroke(overrides = {}) {
     if (!this._fogPoints) return null;
@@ -349,6 +353,7 @@ export class Scene3DAdapter {
       radius: overrides.radius || 36,
     };
     this.scene.addFogStroke(stroke);
+    this.scene.clearDrawingPreview?.();
     this._fogPoints = null;
     this._fogTool = null;
     return stroke;
