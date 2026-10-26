@@ -10,6 +10,22 @@ Dice physics/render fixes found by testing 0.7.8 in the field. (Repackaged
 in place after field-testing caught the d4's rest pose — see below.)
 
 ### Fixed
+- **The d4 roll crashed at spawn and froze the table.** Field-testing the
+  first 0.7.9 packaging showed the d4 "spawning in the plane and doing
+  nothing" (a half-buried wedge) in 3D and a frozen dice panel + stuck camera
+  in 2D. Root cause, found by running the real module: `_spawnDie` never
+  destructured `labelValues` — every d4 roll threw a ReferenceError AFTER the
+  mesh was created but BEFORE the physics body existed, leaving a bodyless
+  tetra at the scene origin (half of it below the floor — the wedge); the
+  per-frame mesh sync then threw on `d.body.position` every frame, killing the
+  render loop (room frozen at that frame; "does nothing"). Fixes: the
+  destructure is complete; physics bodies are now created BEFORE cosmetic
+  labels so a label failure can only log, never break the die or the loop;
+  the per-frame sync skips body-less entries defensively; and the settle-snap
+  block's stray `CANNON` reference (a second loop-killer at settle) now reads
+  the stored `this.CANNON`. Verified by running the real module: dice tumble,
+  settle at exact inradii (flush, apex up), sleep, and report values — d4,
+  d8, d10, d20 in one batch.
 - **Settled dice now rest like real dice.** The physics solver can stop a die
   mid-tilt (a tetra balancing on an edge/vertex contact) which read as "not a
   d4 at all" — and it leaves a small allowed penetration at rest (the d4 sank

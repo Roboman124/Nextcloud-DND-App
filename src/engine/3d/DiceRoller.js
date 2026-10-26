@@ -122,7 +122,7 @@ export class DiceRoller {
 
   _spawnDie(type, color, rng) {
     const { THREE, CANNON } = this;
-    const { geometry, shape, faceValue, scale, faceMap, faceRadius, labelSize, labelMode } = buildDie(type, THREE, CANNON);
+    const { geometry, shape, faceValue, scale, faceMap, faceRadius, labelSize, labelMode, labelValues } = buildDie(type, THREE, CANNON);
 
     const mat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(color),
@@ -140,9 +140,11 @@ export class DiceRoller {
       new THREE.LineBasicMaterial({ color: 0x111111 })
     );
     mesh.add(edges);
-    if (labelMode === 'd4') addD4Labels(mesh, geometry, labelValues, labelSize, THREE);
-    else addFaceLabels(mesh, faceMap, faceRadius, labelSize, THREE);
 
+    // Physics FIRST — labels are cosmetic and must never be able to leave a
+    // bodyless mesh frozen at the scene origin (a missing destructure did
+    // exactly that: the die "spawned in the plane and did nothing", and the
+    // per-frame sync then threw, killing the whole render loop).
     const body = new CANNON.Body({
       mass: 1,
       shape,
@@ -160,6 +162,14 @@ export class DiceRoller {
 
     this.world.addBody(body);
     this.dice.push({ mesh, body, type, faceValue, scale, asleep: false });
+
+    try {
+      if (labelMode === 'd4') addD4Labels(mesh, geometry, labelValues, labelSize, THREE);
+      else addFaceLabels(mesh, faceMap, faceRadius, labelSize, THREE);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[grimoire] die label painting failed (die still rolls)', err);
+    }
   }
 
   /**
@@ -171,6 +181,7 @@ export class DiceRoller {
     if (this.ownsWorld) this.world.step(1 / 60, dt, 3);
     if (this._settled || this.dice.length === 0) {
       for (const d of this.dice) {
+        if (!d.body || !d.mesh) continue; // a failed spawn must not kill the loop
         d.mesh.position.copy(d.body.position);
         d.mesh.quaternion.copy(d.body.quaternion);
       }
@@ -180,6 +191,7 @@ export class DiceRoller {
     let allAsleep = true;
     let allSlow = true;       // velocity-based fallback for dice that won't sleep
     for (const d of this.dice) {
+      if (!d.body || !d.mesh) continue;
       d.mesh.position.copy(d.body.position);
       d.mesh.quaternion.copy(d.body.quaternion);
       if (d.body.sleepState !== this.CANNON.Body.SLEEPING) allAsleep = false;
@@ -202,7 +214,7 @@ export class DiceRoller {
       // leaves a small allowed sink (a few % of the die) that reads as the
       // die "clipping into the floor".
       for (const d of this.dice) {
-        const shape = d.body.shapes[0];
+        const shape = d.body?.shapes?.[0];
         if (!shape?.vertices) continue;
         let lowest = Infinity;
         for (const v of shape.vertices) {
@@ -226,8 +238,8 @@ export class DiceRoller {
             if (w.y < worstDot) { worstDot = w.y; worst = w; }
           }
           if (worst) {
-            const delta = new CANNON.Quaternion();
-            delta.setFromVectors(worst, new CANNON.Vec3(0, -1, 0));
+            const delta = new this.CANNON.Quaternion();
+            delta.setFromVectors(worst, new this.CANNON.Vec3(0, -1, 0));
             d.body.quaternion = delta.mult(d.body.quaternion);
             // Re-run the flush lift: the alignment can change the lowest point.
             let lowest2 = Infinity;
