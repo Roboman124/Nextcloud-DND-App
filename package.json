@@ -15,6 +15,7 @@
     "@nextcloud/initial-state": "^2.2.0",
     "@nextcloud/router": "^3.0.1",
     "cannon-es": "^0.20.0",
+    "dompurify": "^3.4.17",
     "konva": "^9.3.0",
     "three": "^0.160.0",
     "vue": "^3.4.0",

@@ -145,10 +145,13 @@ class RoomController extends OCSController {
                 [$layer, $action] = $layerAction;
                 $perms = $this->permissionsFor($scene->getCampaignId());
                 $allowed = $perms[$layer][$action] ?? true;
-                // ownerOnly on tokens: a player may only update/delete their own.
+                // ownerOnly on tokens: a player may only update/delete their
+                // own. Ownership resolves from the PERSISTED scene doc and is
+                // never taken from the client; unresolvable (unowned/legacy)
+                // tokens are DENIED — deny by default, not allow.
                 if ($allowed && ($perms[$layer]['ownerOnly'] ?? false) && $action !== 'create') {
-                    $tokenOwner = $this->tokenOwner($scene->getCampaignId(), $payload);
-                    $allowed = $tokenOwner === null || $tokenOwner === $this->userId;
+                    $tokenOwner = $this->tokenOwner($sceneId, $payload);
+                    $allowed = $tokenOwner !== null && $tokenOwner === $this->userId;
                 }
                 if (!$allowed) {
                     return new JSONResponse(['error' => "Permission denied: {$layer}.{$action}"], Http::STATUS_FORBIDDEN);
@@ -336,23 +339,25 @@ class RoomController extends OCSController {
         };
     }
 
-    /** Resolve the owner of a token referenced in a payload, or null. */
-    private function tokenOwner(int $campaignId, $payload): ?string {
+    /** Resolve a token's owner from the PERSISTED scene document. Never
+     * trusts client data: an unresolvable (or unowned/legacy) token is null,
+     * and the ownerOnly gate DENIES null — deny by default. */
+    private function tokenOwner(int $sceneId, $payload): ?string {
         if (!is_array($payload)) return null;
-        // The token's owner field is set client-side when the token is created;
-        // for move/delete the payload carries only id, so we look up the scene.
-        // This is best-effort: if we can't resolve it, allow (null).
         $id = $payload['id'] ?? null;
-        if (!$id) return null;
+        if (!$id || !is_string($id)) return null;
         try {
-            $scene = $this->sceneMapper->find((int) $id);
+            $scene = $this->sceneMapper->find($sceneId);
         } catch (\Throwable) {
-            return $payload['owner'] ?? null;
+            return null;
         }
         $data = json_decode($scene->getData() ?? '{}', true) ?: [];
         foreach ($data['tokens'] ?? [] as $t) {
-            if (($t['id'] ?? null) === $id) return $t['owner'] ?? null;
+            if (is_array($t) && ($t['id'] ?? null) === $id) {
+                $owner = $t['owner'] ?? null;
+                return is_string($owner) && $owner !== '' ? $owner : null;
+            }
         }
-        return $payload['owner'] ?? null;
+        return null;
     }
 }

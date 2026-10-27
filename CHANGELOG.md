@@ -4,6 +4,45 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.7.10] - 2026-10-27
+
+Security patches from an external source-code audit (five findings — all addressed).
+
+### Fixed — security
+- **Rich text XSS (critical).** Notes on the canvas were rendered with
+  `v-html` unsanitized: any invited player could send/persist markup and run
+  it in every viewer's Nextcloud-origin page. Rich text is now
+  sanitized with DOMPurify (default safe profile — scripts, event handlers
+  and `javascript:`/`data:` URLs stripped; heading/colour/list/link
+  formatting preserved) at every entry point AND at render, so even
+  previously-persisted malicious notes render inert.
+- **Scene-save takeover (high).** The scene-save endpoint accepted a full
+  document replacement from ANY invited player, including renaming the scene
+  and wiping the map/fog/config. Player saves are now a server-side scoped
+  merge: only keys whose permission layer allows updates pass through
+  (tokens/blocks/maps/drawings/measurements), while `name`, `gridConfig`,
+  mode and unknown keys remain GM-only and can no longer be overwritten or
+  cleared. Also gained the standard raw-body fallback.
+- **ownerOnly token enforcement bypass (high).** The token-ownership lookup
+  queried a SCENE ROW by the token id (always missing), then fell back to the
+  attacker-supplied `owner` field, and treated null (= unknown) as allowed —
+  so ownerOnly token protection was effectively decorative and players could
+  move or delete tokens of others. Ownership now resolves from the persisted
+  scene document only, with no client fallback, and unknown ownership DENIES
+  the action (deny by default).
+- **Third-party addon proxy / store endpoints removed (two highs).** The
+  iframe addon system was removed from the app in 0.7.1, but its server-side
+  same-origin fetch proxy and store endpoints remained — serving
+  attacker-controlled remote HTML from the Nextcloud origin and fetching
+  attacker URLs with redirects left intact (SSRF class). Rather than
+  hardening dead endpoints, they (and their DB entities, routes, and
+  capability bridge references) are deleted outright.
+
+### Removed
+- `AddonProxyController`, `AddonController`, `Addon`/`AddonMapper` entities
+  and the `/addon-proxy` + `/api/addons(-store)` routes (dead since 0.7.1's
+  addon consolidation; kept previously only for compatibility).
+
 ## [0.7.9] - 2026-10-26
 
 Dice physics/render fixes found by testing 0.7.8 in the field. (Repackaged

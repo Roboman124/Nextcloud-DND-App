@@ -58,13 +58,78 @@ class SceneController extends OCSController {
 
     #[NoAdminRequired]
     public function update(int $id, ?string $name = null, ?array $data = null): JSONResponse {
-        // Players may edit scene contents during play (move tokens, save); only
-        // creation and deletion of scenes are owner-only.
+        // Players may edit scene contents during play; creation and deletion
+        // of scenes are owner-only. A player's save is a SCOPED MERGE, not a
+        // wholesale replacement: only document keys whose layer the campaign's
+        // permission table allows get in, and GM-only keys (name, grid
+        // config, the map) can never be touched or wiped by a player.
         $s = $this->accessibleOr404($id);
         if ($s instanceof JSONResponse) return $s;
-        if ($name !== null) $s->setName($name);
-        if ($data !== null) $s->setData(json_encode($data));
+
+        // Raw-body fallback: PUT param binding has proved unreliable on some
+        // setups — a miss would throw a 400 on the (optional) params above,
+        // so recover from the raw JSON body first.
+        if ($name === null && $data === null) {
+            $raw = json_decode((string) file_get_contents('php://input'), true);
+            if (is_array($raw)) {
+                if (isset($raw['name']) && is_scalar($raw['name'])) $name = (string) $raw['name'];
+                if (isset($raw['data']) && is_array($raw['data'])) $data = $raw['data'];
+            }
+        }
+
+        if ($this->ownsCampaign($s->getCampaignId())) {
+            if ($name !== null) $s->setName($name);
+            if ($data !== null) $s->setData(json_encode($data));
+            return new JSONResponse($this->scenes->update($s));
+        }
+
+        $perms = $this->permissionsFor($s->getCampaignId());
+        // Doc key -> permission layer. Keys absent here are GM-only
+        // (name, gridConfig, mode…) or unknown — dropped for players. Fog
+        // writes never pass through for players (fog is GM-only, matching
+        // the live push path).
+        $layerByKey = [
+            'tokens' => 'tokens',
+            'blocks' => 'maps',
+            'maps' => 'maps',
+            'mapUrl' => 'maps',
+            'map2d' => 'maps',
+            'map3d' => 'maps',
+            'drawings' => 'drawings',
+            'measurements' => 'drawings',
+        ];
+        $current = json_decode($s->getData() ?? '{}', true);
+        if (!is_array($current) || array_is_list($current)) $current = [];
+        $merged = $current;
+        if (is_array($data)) {
+            foreach ($data as $key => $value) {
+                $layer = $layerByKey[$key] ?? null;
+                if ($layer === null) continue;
+                if (!($perms[$layer]['update'] ?? true)) continue;
+                $merged[$key] = $value;
+            }
+        }
+        $s->setData(json_encode($merged));
         return new JSONResponse($this->scenes->update($s));
+    }
+
+    /** The campaign's per-layer player permission flags (defaults: all true). */
+    private function permissionsFor(int $campaignId): array {
+        try {
+            $campaign = $this->campaigns->find($campaignId);
+        } catch (DoesNotExistException) {
+            return [];
+        }
+        $data = json_decode($campaign->getData() ?? '{}', true) ?: [];
+        $perms = is_array($data['permissions'] ?? null) ? $data['permissions'] : [];
+        $out = [];
+        foreach (['maps', 'tokens', 'drawings', 'fog'] as $layer) {
+            $out[$layer] = array_merge(
+                ['create' => true, 'update' => true, 'delete' => true, 'ownerOnly' => false],
+                $perms[$layer] ?? []
+            );
+        }
+        return $out;
     }
 
     #[NoAdminRequired]

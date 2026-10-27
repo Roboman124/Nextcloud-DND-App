@@ -162,11 +162,12 @@
         :token="healthToken" :x="healthX" :y="healthY"
         @change="onHealthChange" @close="healthToken = null" />
 
-      <!-- Rich text on canvas (HTML overlay layer) -->
+      <!-- Rich text on canvas (HTML overlay layer) — sanitized on render:
+           notes arrive over the room from other users' content. -->
       <div class="rich-text-layer">
         <div v-for="rt in richTexts" :key="rt.id" class="rich-text-item"
           :style="{ left: rt.screenX + 'px', top: rt.screenY + 'px', color: rt.color }"
-          v-html="rt.html"></div>
+          v-html="sanitizeRt(rt.html)"></div>
       </div>
 
       <!-- In-place rich text editor (text tool) -->
@@ -180,6 +181,7 @@
 
 <script>
 import axios from '@nextcloud/axios';
+import DOMPurify from 'dompurify';
 import { generateUrl } from '../lib/url.js';
 import { loadState } from '@nextcloud/initial-state';
 import DicePanel from '../components/DicePanel.vue';
@@ -294,6 +296,26 @@ export default {
       return { pointer: '➤', grab: '✋', measure: '📏', aoe: '✸', build: '🧱', draw: '✏️', fog: '🌫' }[id] || '•';
     },
 
+    /**
+     * Rich text is user content and can arrive from ANY member of the room
+     * (peer-to-peer messages are not re-validated by the relay) or from a
+     * previously-persisted note — everything is sanitized before rendering
+     * and before it is kept locally. DOMPurify's default profile strips
+     * scripts, event handlers and javascript:/data: URLs; the editor's
+     * formatting vocabulary (headings/colour/lists/links) survives.
+     */
+    sanitizeRt(html) {
+      if (typeof html !== 'string' || !html) return '';
+      return DOMPurify.sanitize(html);
+    },
+
+    /** Keep a rich text note — sanitized at entry (render sanitizes too). */
+    _pushRichText(p) {
+      if (this.richTexts.some((r) => r.id === p.id)) return;
+      this.richTexts.push({ ...p, html: this.sanitizeRt(p.html) });
+      this.projectRichTexts();
+    },
+
     hydrate(doc) {
       if (!doc) return;
       if (this.mode === '2d') {
@@ -313,7 +335,7 @@ export default {
         for (const d of doc.drawings || []) {
           if (d.points) this.scene2d._addLine?.(d);
           else if (d.shape) this.scene2d._addShape?.(d);
-          else if (d.text && d.html) this.richTexts.push({ ...d });
+          else if (d.text && d.html) this._pushRichText(d);
           else if (d.text) this.scene2d._addText?.(d);
         }
         this.projectRichTexts();
@@ -498,7 +520,7 @@ export default {
       if (m.type === 'draw:text') {
         if (p.html) {
           // Rich text overlay (HTML).
-          if (!this.richTexts.some((r) => r.id === p.id)) this.richTexts.push({ ...p });
+          this._pushRichText(p);
           this.projectRichTexts();
         } else {
           // Plain text note (legacy / from older clients).
@@ -897,7 +919,7 @@ export default {
         ? { x: w.x * 70 + 2000, y: (w.z ?? 0) * 70 + 2000 }
         : { x: w.x, y: w.y };
       const rt = { id, ...p, html, text, color: this.drawColor };
-      this.richTexts.push(rt);
+      this._pushRichText(rt);
       this.projectRichTexts();
       this.sync?.send({ type: 'draw:text', payload: rt });
       this.textEditor = null;
