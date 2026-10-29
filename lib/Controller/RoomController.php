@@ -141,6 +141,13 @@ class RoomController extends OCSController {
         // delete on each layer unless the campaign allows it. GMs bypass.
         if (!$this->isGm($scene->getCampaignId())) {
             $layerAction = $this->layerActionFor($type);
+            // An upsert of an EXISTING token is an update (rotate/scale/rename),
+            // not a create — so it's the update permission that gates it.
+            if ($layerAction !== null && $type === 'token:upsert' && is_array($payload)
+                && isset($payload['id']) && is_string($payload['id'])
+                && $this->tokenExists($sceneId, $payload['id'])) {
+                $layerAction[1] = 'update';
+            }
             if ($layerAction !== null) {
                 [$layer, $action] = $layerAction;
                 $perms = $this->permissionsFor($scene->getCampaignId());
@@ -339,6 +346,24 @@ class RoomController extends OCSController {
         };
     }
 
+    /** The persisted token list of a scene (empty on any failure). */
+    private function sceneTokens(int $sceneId): array {
+        try {
+            $scene = $this->sceneMapper->find($sceneId);
+        } catch (\Throwable) {
+            return [];
+        }
+        $data = json_decode($scene->getData() ?? '{}', true) ?: [];
+        return is_array($data['tokens'] ?? null) ? $data['tokens'] : [];
+    }
+
+    private function tokenExists(int $sceneId, string $id): bool {
+        foreach ($this->sceneTokens($sceneId) as $t) {
+            if (is_array($t) && ($t['id'] ?? null) === $id) return true;
+        }
+        return false;
+    }
+
     /** Resolve a token's owner from the PERSISTED scene document. Never
      * trusts client data: an unresolvable (or unowned/legacy) token is null,
      * and the ownerOnly gate DENIES null — deny by default. */
@@ -346,13 +371,7 @@ class RoomController extends OCSController {
         if (!is_array($payload)) return null;
         $id = $payload['id'] ?? null;
         if (!$id || !is_string($id)) return null;
-        try {
-            $scene = $this->sceneMapper->find($sceneId);
-        } catch (\Throwable) {
-            return null;
-        }
-        $data = json_decode($scene->getData() ?? '{}', true) ?: [];
-        foreach ($data['tokens'] ?? [] as $t) {
+        foreach ($this->sceneTokens($sceneId) as $t) {
             if (is_array($t) && ($t['id'] ?? null) === $id) {
                 $owner = $t['owner'] ?? null;
                 return is_string($owner) && $owner !== '' ? $owner : null;

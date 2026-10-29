@@ -104,6 +104,21 @@
         <span class="opt-hint" v-else>GM only</span>
       </div>
 
+      <!-- Selected-token controls (3D rooms): rotate, scale, delete -->
+      <div v-if="mode === '3d' && selectedToken" class="tool-options token-options">
+        <span class="opt-label">{{ selectedToken.label || 'Model' }}</span>
+        <span class="opt-sep" />
+        <button :disabled="!canEditToken" @click="rotateSelected(-45)" title="Rotate 45° left">⟲</button>
+        <button :disabled="!canEditToken" @click="rotateSelected(45)" title="Rotate 45° right">⟳</button>
+        <span class="opt-sep" />
+        <span class="opt-label">Size</span>
+        <button :disabled="!canEditToken" @click="scaleSelected(-0.25)" title="Smaller">−</button>
+        <button :disabled="!canEditToken" @click="scaleSelected(0.25)" title="Bigger">+</button>
+        <span class="opt-sep" />
+        <button :disabled="!canDeleteToken" class="danger" @click="deleteSelected" title="Delete this token">🗑</button>
+        <button @click="clearSelection" title="Deselect">✕</button>
+      </div>
+
       <!-- Transient toast (model load errors etc.) -->
       <div v-if="toast" class="toast">{{ toast }}</div>
 
@@ -205,7 +220,7 @@ export default {
   data() {
     return {
       scene: null, mode: '2d', activeTool: 'pointer', toolList: [],
-      showInit: false, showAssets: false, showDM: false,
+      showInit: false, showAssets: false, showDM: false, selectedTokenId: null,
       diceRoller: null,
       roster: [],
       toast: null, measureUnit: 'ft', aoeShape: 'circle',
@@ -226,6 +241,32 @@ export default {
   },
   watch: {
     showDM(v) { if (v && this.role === 'gm') this.loadRoster(); },
+  },
+  computed: {
+    /** The live data of the selected token, or null. */
+    selectedToken() {
+      if (!this.selectedTokenId) return null;
+      return this.engine?.tokens?.get(this.selectedTokenId)?.data || null;
+    },
+    /** GM bypasses; players follow the campaign's tokens permissions. */
+    canEditToken() {
+      const t = this.selectedToken;
+      if (!t) return false;
+      if (this.role === 'gm') return true;
+      const p = this.permissions?.tokens || {};
+      if (p.update === false) return false;
+      if (p.ownerOnly && t.owner !== this.userId) return false;
+      return true;
+    },
+    canDeleteToken() {
+      const t = this.selectedToken;
+      if (!t) return false;
+      if (this.role === 'gm') return true;
+      const p = this.permissions?.tokens || {};
+      if (p.delete === false) return false;
+      if (p.ownerOnly && t.owner !== this.userId) return false;
+      return true;
+    },
   },
   async mounted() {
     this.userId = loadState('grimoire', 'userId', 'anon');
@@ -279,6 +320,9 @@ export default {
     // Measurement labels render as a screen-space HTML overlay (works in both
     // kinds of room regardless of zoom/camera).
     this.adapter.onMeasure = (m) => { this.measureLabel = m; };
+    // Grab-tool clicks report the selected token so the rotate/scale/delete
+    // bar can show (3D rooms).
+    this.adapter.onSelectToken = (id) => { this.selectedTokenId = id; };
 
     await this.connectSync();
     this.hydrate(data.data);
@@ -470,6 +514,7 @@ export default {
       if (m.type === 'token:remove') {
         this.scene2d?.removeToken(p.id);
         this.scene3d?.removeToken(p.id);
+        if (p.id === this.selectedTokenId) this.clearSelection();
       }
       if (m.type === 'token:hp') {
         this.scene2d?.updateHp?.(p.id, p.hp);
@@ -589,6 +634,38 @@ export default {
     // The room kind is set at scene creation and never changes; there is no
     // mode toggle.
     activate(id) { this.tools.activate(id); this.activeTool = id; },
+
+    // --- Selected-token edits (3D): rotate / scale / delete ---
+
+    rotateSelected(deg) {
+      const t = this.selectedToken;
+      if (!t) return;
+      this._applyTokenEdit({ ...t, rotation: (t.rotation || 0) + (deg * Math.PI) / 180 });
+    },
+    scaleSelected(delta) {
+      const t = this.selectedToken;
+      if (!t) return;
+      const scale = Math.min(4, Math.max(0.4, (t.scale || 1) + delta));
+      this._applyTokenEdit({ ...t, scale });
+    },
+    /** Apply a token data edit locally + broadcast it (upsert merges by id). */
+    _applyTokenEdit(data) {
+      this.engine.upsertToken(data);
+      this.sync?.send({ type: 'token:upsert', payload: data });
+    },
+    deleteSelected() {
+      const t = this.selectedToken;
+      if (!t) return;
+      if (!window.confirm(`Delete "${t.label || 'this token'}"?`)) return;
+      this.scene2d?.removeToken(t.id);
+      this.engine.removeToken(t.id);
+      this.sync?.send({ type: 'token:remove', payload: { id: t.id } });
+      this.clearSelection();
+    },
+    clearSelection() {
+      this.selectedTokenId = null;
+      this.engine?.setSelectedToken?.(null);
+    },
 
     toggleSnap() {
       this.snapEnabled = !this.snapEnabled;
@@ -1040,6 +1117,12 @@ export default {
 .tool-options button.danger:hover { color: #fff; background: #e74c3c; border-color: #e74c3c; }
 .tool-options .opt-sep { width: 1px; height: 18px; background: var(--g-border, #2d3748); margin: 0 2px; }
 .tool-options .opt-hint { font-size: 10px; color: var(--g-text-dim, #8b949e); font-style: italic; }
+.tool-options button:disabled { opacity: .35; cursor: default; }
+/* Selection bar sits a row above the tool-options bar so both can coexist. */
+.token-options { bottom: 76px; }
+.token-options .opt-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; text-transform: none; letter-spacing: 0; font-size: 12px;
+  color: var(--g-text, #d8dde4); }
 .build-color { width: 28px; height: 22px; border: none; background: none; vertical-align: middle; cursor: pointer; padding: 0; }
 .build-range { width: 70px; vertical-align: middle; margin: 0 4px; }
 .fog-check { margin-left: 4px; vertical-align: middle; cursor: pointer; }

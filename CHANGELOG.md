@@ -4,6 +4,24 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.7.11] - 2026-10-29
+
+Community feature request: manage placed 3D models.
+
+### Added
+- **Selected-token controls in 3D rooms.** Click a token with the Grab tool
+  and a bar appears above the tool options: **rotate** ±45°, **resize**
+  (−/+ 0.25 steps, 0.4×–4×), **delete** (with a confirmation), and deselect.
+  A ring highlights the selected token and follows it as it moves.
+- Changes apply instantly and broadcast as `token:upsert`; deletes remove the
+  token for everyone (`token:remove`) and clear the selection. Clicking empty
+  space deselects. Remote deletion of the selected token clears the bar.
+
+### Changed
+- **Upserts of existing tokens now check the `update` permission** (create
+  before, when the token was new). Rotate/resize are edits, not creations —
+  this matches the UI gating, which also honours `ownerOnly`.
+
 ## [0.7.10] - 2026-10-27
 
 Security patches from an external source-code audit (five findings — all addressed).

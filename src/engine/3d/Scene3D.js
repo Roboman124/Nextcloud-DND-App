@@ -69,6 +69,8 @@ export class Scene3D {
     this._live = null;
     this._liveSid = null;   // identity of the in-progress live stroke
     this._livePtN = 0;      // how many stroke-space points are already inked
+    this._selectedId = null;      // selected token (ring highlight)
+    this._selectionRing = null;
 
     this._buildLights();
     this._buildGround();
@@ -769,6 +771,31 @@ export class Scene3D {
   }
 
   /** Per-frame update. Returns dt so callers (DiceRoller) can share it. */
+  /** Select a token (or null) — draws a ring under it, follows it each frame. */
+  setSelectedToken(id) {
+    this._selectedId = id || null;
+    if (!this._selectedId) {
+      if (this._selectionRing) this._selectionRing.visible = false;
+      return;
+    }
+    if (!this._selectionRing) {
+      const { THREE } = this;
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.85, 1.05, 48),
+        new THREE.MeshBasicMaterial({
+          color: 0x0082c9, transparent: true, opacity: 0.85,
+          side: THREE.DoubleSide, depthWrite: false,
+        })
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.03;
+      ring.renderOrder = 2;
+      this.scene.add(ring);
+      this._selectionRing = ring;
+    }
+    this._selectionRing.visible = true;
+  }
+
   render() {
     const dt = this._clock.getDelta();
     this.world.step(1 / 60, dt, 3);
@@ -777,6 +804,16 @@ export class Scene3D {
     // fog/pencil strokes triggered a full texture re-upload per mouse-move.
     for (const layer of [this._fog, this._draw, this._live]) {
       if (layer?.dirty) { layer.tex.needsUpdate = true; layer.dirty = false; }
+    }
+    // Keep the selection ring under its (possibly moving or removed) token.
+    const sel = this._selectedId ? this.tokens.get(this._selectedId) : null;
+    if (this._selectionRing) {
+      if (sel?.mesh) {
+        this._selectionRing.visible = true;
+        this._selectionRing.position.set(sel.mesh.position.x, 0.03, sel.mesh.position.z);
+      } else {
+        this._selectionRing.visible = false;
+      }
     }
     this.renderer.render(this.scene, this.camera);
     return dt;

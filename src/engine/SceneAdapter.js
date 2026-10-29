@@ -148,6 +148,11 @@ export class Scene2DAdapter {
   }
   highlightToken() { /* could add a selection ring */ }
 
+  /** Select (or clear, with null) a token; notifies the host for its UI. */
+  selectToken(id) {
+    this.onSelectToken?.(id || null);
+  }
+
   /** Begin a fog brush stroke. tool = 'brush' | 'eraser'. GM-only. */
   beginFogStroke(w, tool) {
     this._fogTool = tool;
@@ -311,6 +316,12 @@ export class Scene3DAdapter {
   snapToGrid(w) { return { x: Math.round(w.x), z: Math.round(w.z) }; }
   setTokensDraggable() { /* handled via raycast in GrabTool */ }
   highlightToken() {}
+
+  /** Select (or clear, with null) a token: ring highlight + host UI callback. */
+  selectToken(id) {
+    this.scene.setSelectedToken?.(id || null);
+    this.onSelectToken?.(id || null);
+  }
 
   // --- Fog of war (3D). The FogTool speaks these verbs in both modes; the
   // stroke store keeps the 2D-pixel format, so 3D strokes convert at these

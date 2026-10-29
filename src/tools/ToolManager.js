@@ -104,6 +104,9 @@ export class GrabTool extends Tool {
   onPointerDown(w) {
     const hit = this.adapter.pickToken?.(w);
     this.selected = hit || null;
+    // Clicking a token selects it (the host shows a rotate/scale/delete bar);
+    // clicking empty space clears the selection.
+    this.adapter.selectToken?.(hit ? hit.id : null);
     if (hit) {
       this.adapter.highlightToken?.(hit.id);
       // Keep the grab-point offset: moving a token to the raw cursor point
