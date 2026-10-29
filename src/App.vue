@@ -13,7 +13,7 @@ export default { name: 'GrimoireApp' };
  * Bridge Nextcloud's theme CSS variables into Grimoire's --g-* tokens.
  * Nextcloud sets these on :root/body and flips them automatically for
  * light/dark/high-contrast. We only fall back to dark defaults if the
- * Nextcloud vars are absent (e.g. standalone demo.html without the host).
+ * Nextcloud vars are absent.
  */
 :root {
   --g-bg:        var(--color-main-background,     #14181f);

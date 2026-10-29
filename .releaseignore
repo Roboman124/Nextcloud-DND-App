@@ -1,7 +1,6 @@
 .git
 .github
 node_modules
-server/node_modules
 src
 build
 *.tar.gz
@@ -9,7 +8,6 @@ build
 .releaseignore
 vite.config.js
 package-lock.json
-demo.html
 HANDOFF.md
 docs
 catalog

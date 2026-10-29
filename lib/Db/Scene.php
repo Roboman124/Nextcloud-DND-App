@@ -9,7 +9,7 @@ use OCP\AppFramework\Db\Entity;
  * A scene is one tabletop layout inside a campaign. `mode` is '2d' or '3d'.
  * `data` is a JSON blob holding the full scene graph: tokens, drawings, fog,
  * map references, AoE templates, camera. Keeping it as one document keeps the
- * schema simple and lets the frontend own the format; the relay only diffs it.
+ * schema simple and lets the frontend own the format.
  *
  * @method int getCampaignId()
  * @method void setCampaignId(int $campaignId)

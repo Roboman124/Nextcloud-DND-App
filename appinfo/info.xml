@@ -19,11 +19,11 @@ can load glTF character models and build maps in three dimensions.
 - Tools: pointer, grab, measurement, area-of-effect, draw, fog, build
 - Token health system with DM-controlled HP bars
 - Player permissions (per-layer create/update/delete, owner-only tokens)
-- Real-time multiplayer rooms (signed room tokens + polling fallback)
+- Real-time multiplayer rooms (built-in sync, no extra services)
 - Addon/extension system with a sandboxed GRIM SDK
 - Asset library backed by Nextcloud Files
     ]]></description>
-    <version>0.7.11</version>
+    <version>0.8.0</version>
     <licence>AGPL-3.0-or-later</licence>
     <author>Roboman124</author>
     <namespace>Grimoire</namespace>

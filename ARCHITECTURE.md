@@ -24,7 +24,7 @@ Grimoire mirrors that shape deliberately:
 
 | Owlbear concept | Grimoire equivalent |
 |---|---|
-| Room | Live session keyed to a Scene, synced over a WebSocket relay |
+| Room | Live session keyed to a Scene, synced through the Nextcloud room API |
 | Scene | `Scene` row (JSON scene graph) in a Campaign |
 | Tokens / maps / drawings / fog | Layers in `Scene2D`; meshes in `Scene3D` |
 | Pointer / measure tools | `tools/` + `SceneAdapter` (works in 2D **and** 3D) |
@@ -43,7 +43,7 @@ third-party cloud).
 ┌──────────────────────────────────────────────────────────────┐
 │ Nextcloud (PHP)                                                │
 │  PageController → SPA   CampaignController/SceneController →    │
-│  JSON API   RoomController → relay token + poll fallback       │
+│  JSON API   RoomController → room handshake + message sync     │
 │  Db: Campaign, Scene (scene graph stored as JSON document)     │
 └───────────────▲───────────────────────────┬───────────────────┘
                 │ initial state / REST       │ persist snapshots
@@ -57,22 +57,19 @@ third-party cloud).
 │  │            SceneAdapter (2D & 3D)                          │  │
 │  │                  │                                         │  │
 │  │            ToolManager → Pointer / Grab / Measure / AoE    │  │
-│  │  SyncClient (WebSocket + poll fallback)                    │  │
-│  │  AddonManager ── iframe sandbox ── GRIM SDK (guest)        │  │
+│  │  SyncClient (built-in room sync: push + 1 s poll)          │  │
 │  └────────────────────────────────────────────────────────┘  │
-└───────────────▲───────────────────────────┬───────────────────┘
-                │ WS                         │ WS
-        ┌───────┴────────────────────────────┴───────┐
-        │ Realtime relay (standalone Node service)    │
-        │ rooms, fan-out, presence; auth via token    │
-        └─────────────────────────────────────────────┘
+└───────────────────────────┬───────────────────────────────────┘
+                            │ HTTPS (push / poll)
+                ┌───────────┴─────────────────┐
+                │ Nextcloud room endpoints     │
+                │ (distributed cache fan-out)  │
+                └──────────────────────────────┘
 ```
 
 The **engine** layer takes `THREE`, `CANNON`, and `Konva` as injected
-dependencies and has no Vue or Nextcloud imports. That is why the same modules
-run unchanged in `demo.html` (plain ES modules + import map) and inside the
-Nextcloud Vue bundle. Keep it that way — it is what makes the engine testable
-and portable.
+dependencies and has no Vue or Nextcloud imports. Keep it that way — it is what
+makes the engine testable and portable.
 
 ---
 
@@ -142,28 +139,24 @@ room via the usual `dice:result` message.
 
 ## 5. Real-time sync
 
-Nextcloud's PHP request model is not built for persistent sockets, so live
-rooms use a **standalone WebSocket relay** — a small Node service that:
+Rooms use **one transport: the Nextcloud app itself** — nothing extra to
+deploy. `SyncClient` POSTs small JSON messages (token moved, pointer at X, dice
+rolled, fog/draw strokes) to `/api/room/push` and polls `/api/room/poll` once a
+second. `RoomController` fans messages out through Nextcloud's distributed
+cache (Redis/APCu) and **enforces every permission check before accepting a
+push** — GM-only fog and HP edits, per-layer create/update/delete, and
+`ownerOnly` token ownership resolved from the persisted scene document.
+Presence is derived client-side from recent traffic plus a 30 s heartbeat, so
+the party list works without a server-side session registry.
 
-- accepts a connection with a short-lived room token (issued by
-  `RoomController::token`, signed so the relay can verify it without a DB hit),
-- joins the socket to a room channel,
-- fans messages out to everyone else in the room,
-- tracks presence (who's connected, cursor colors).
+Durable state (token positions, scene items) is snapshotted back to the
+`Scene.data` JSON document via `SceneController::update`, so a refresh restores
+the table. A room handshake (`POST /api/scenes/{id}/room-token`) returns the
+caller's role, the campaign permissions and whether a distributed cache is
+available; without a cache the room runs local-only and the UI says so.
 
-The relay is **dumb on purpose**: it does not understand scene semantics, it
-just relays JSON. Durable state (token positions, scene items) is periodically
-snapshotted back to the `Scene.data` JSON document via `SceneController::update`
-so a refresh restores the table.
-
-If the relay is unreachable, `SyncClient` falls back to **long-polling**
-`/api/room/poll`, so a room still functions (laggier) on a vanilla Nextcloud
-with nothing extra deployed. A reference relay ships in `server/relay.js` — a
-small `ws` service that authenticates by room token and fans JSON out to the
-other members of a room. The remaining piece is `RoomController::token` signing
-on the PHP side (see roadmap), so the relay can verify tokens without a DB hit;
-until then the relay accepts unsigned tokens in `GRIMOIRE_DEV_TRUST=1` mode for
-local development.
+Trade-off: poll sync lands updates within about a second — fine for a
+click-to-move table, and it needs no ports, processes or shared secrets.
 
 Conflict policy: transient state (pointers, measurement) is last-write-wins and
 never persisted; durable state is last-write-wins per item with the backend as
@@ -171,27 +164,14 @@ the source of truth on reload.
 
 ---
 
-## 6. Addon system
+## 6. Extensions
 
-Extensibility is a first-class requirement, modeled on Owlbear's approach.
-
-- An addon is any web app described by a `manifest.json` (name, version, icon,
-  `main` URL, `permissions`).
-- `AddonManager` (host) loads the manifest and mounts `main` in a
-  **sandboxed iframe** (`allow-scripts` only — no same-origin access to the
-  host page or other addons).
-- Host and addon communicate over **`postMessage`**. The addon imports the
-  **`GRIM` SDK** which exposes `scene`, `tool`, `dice`, `broadcast`,
-  `metadata`, `notification`, and `party` namespaces, each call a Promise.
-- **Permissions are enforced per message.** Every API method maps to a
-  required permission; a call for a capability the manifest didn't declare is
-  rejected. Nothing is granted by default.
-
-See `examples/initiative-tracker/` for a complete addon that reads the scene's
-tokens, rolls real physics d20s for initiative, sorts, and broadcasts the order.
-
-This means new features — fog brushes, conditions, character sheets, a
-soundboard — can ship as addons without touching the core, exactly as asked.
+Grimoire has no third-party extension runtime. The earlier sandboxed-iframe
+system (manifest.json + `GRIM` SDK + `postMessage` permission bridge) was
+removed in 0.7.1: it widened the app's attack surface (third-party HTML served
+on the Nextcloud origin) far more than it added value, and the features the
+roadmap once called "extensions" — the initiative tracker, for example — ship
+as regular built-in UI instead. New capabilities belong in the core.
 
 ---
 
@@ -204,66 +184,49 @@ grimoire/
 │   └── routes.php            page + JSON API routes
 ├── lib/
 │   ├── AppInfo/Application.php
-│   ├── Controller/           Page, Campaign, Scene, (Room — to add)
+│   ├── Controller/           Page, Campaign, Scene, Room (sync), Session, User, Asset
 │   ├── Db/                   Campaign + Scene entities & mappers
-│   └── Migration/            initial schema
+│   └── Migration/            schema migrations
 ├── templates/main.php        SPA mount point
 ├── src/
 │   ├── main.js, App.vue      Vue boot + router
 │   ├── views/                Campaigns.vue, Room.vue
-│   ├── components/           DiceTray.vue, AddonPanel.vue
+│   ├── components/           DicePanel, DMPanel, HealthEditor, InitiativeTracker…
 │   ├── engine/
 │   │   ├── 2d/Scene2D.js     Konva tabletop
-│   │   ├── 3d/Scene3D.js     three tabletop + glTF models + AoE
+│   │   ├── 3d/Scene3D.js     three tabletop + glTF models + AoE + fog
 │   │   ├── 3d/DiceRoller.js  physics dice
-│   │   ├── sync/SyncClient.js
+│   │   ├── sync/SyncClient.js  built-in room sync
 │   │   └── SceneAdapter.js   2D & 3D adapters for tools
-│   ├── tools/ToolManager.js  pointer / grab / measure / aoe
-│   └── addons/
-│       ├── AddonManager.js   iframe host + permission gate
-│       └── sdk/grimoire-sdk.js  guest SDK (GRIM)
-├── examples/initiative-tracker/   sample addon
-├── server/relay.js              reference WebSocket relay (+ package.json)
-└── demo.html                 standalone engine harness (no Nextcloud needed)
+│   └── tools/ToolManager.js  pointer / grab / measure / aoe / draw / fog / build
+└── README.md, ARCHITECTURE.md, CHANGELOG.md
 ```
 
 ---
 
-## 8. Roadmap (suggested order)
+## 8. Roadmap
 
-**Built now:** project skeleton, DB layer, campaign/scene API, 2D + 3D engine,
-physics dice (calibrated d4–d20), pointer/grab/measure/AoE/draw/fog/build tools,
-addon host + SDK + example + verified store, sync client with signed tokens +
-polling fallback, the reference relay service, runnable demo, asset library
-backed by Nextcloud Files, player roles (GM/player), 2D dice viewport.
+**Built:** campaigns/rooms with 2D-or-3D rooms, the 2D and 3D engines, physics
+dice (d4–d20, canonical settles), grid controls (square/hex, styles, per-scene
+scale), fog of war in both room kinds (brush/eraser/shapes, preview), drawing
+modes, rich text, measure modes (transient/permanent/movement, four measure
+types), token health, player roles and per-layer permissions with owner-only
+tokens, multiple maps per scene, the built-in sync, the Nextcloud Files asset
+library, the DM control panel, and the built-in initiative tracker.
 
-**Next, in rough priority (feature gaps vs Owlbear Rodeo, from the docs):**
-1. **Grid controls** — hex (vertical/horizontal) + isometric grids, line style
-   (solid/dashed/dotted), color/opacity/line-width, per-scene measurement type
-   (chessboard / alternating-diagonal / euclidean / manhattan), and a grid-scale
-   field. Currently Grimoire is square-only, euclidean-only, fixed 5 ft.
-2. **Fog shapes & preview** — rectangle/polygon/circle fog modes (not just
-   brush), per-shape cut/uncut so a revealed room can be re-hidden, a "fog
-   preview" toggle to see the player view, and a configurable fog color.
-3. **Drawing modes** — polygon, marker (freehand), line, triangle, hexagon;
-   fill + stroke style menus; advanced point editing; layer ordering
-   (above/below grid); trim/join of shapes.
-4. **Rich text on canvas** — replace the `prompt()` text tool with an in-place
-   editor (bold/italic/lists/headings/emoji) like Owlbear's Text tool.
-5. **Measure modes** — permanent (double-click to place) rulers and a movement
-   mode that drags a token while showing distance, plus per-scene measurement
-   type selection.
-6. **Player permissions** — per-layer create/update/delete toggles for players
-   (maps/tokens/drawings/fog), plus token ownership ("owner-only") so each
-   player can move only their own characters.
-7. **Multiple maps per scene + grid alignment** — drop several map images onto
-   one infinite canvas and a tool to align a map's grid to the scene grid.
-8. **Casting** — screen-cast the scene to remote viewers (needs streaming
-   infra; lowest priority for a self-hosted app).
+**Next, in rough priority:**
+1. **Dice calibration polish** — canonical face numbering for d8/d12/d20 face
+   maps and a proper d10 (the d4/d8/d10 geometry is exact now; the value
+   labelling for the remaining solids is stable but not canonical).
+2. **Casting** — screen-cast the scene to remote viewers (needs streaming infra;
+   lowest priority for a self-hosted app).
+3. **UI polish** — Owlbear-style layout, first-run empty state, token context
+   menus.
 
 ---
 
 ## 9. Setup
 
-See `README.md` for install and dev commands. The fastest way to see the engine
-work is the standalone demo: serve the folder over http and open `/demo.html`.
+See `README.md` — Grimoire runs as a Nextcloud app (Nextcloud 28–35). Live
+multiplayer is built in and needs a distributed memory cache (Redis or APCu);
+Nextcloud AIO ships Redis by default.

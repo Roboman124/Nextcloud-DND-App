@@ -35,12 +35,14 @@ class PageController extends Controller {
 
         $response = new TemplateResponse(Application::APP_ID, 'main');
 
-        // The 3D engine pulls glTF assets and the addon system loads third-party
-        // iframes, so the CSP needs widening beyond Nextcloud's strict default.
+        // Near-default policy. The old widening existed for the iframe addon
+        // system (removed in 0.7.1) and the external WebSocket relay (removed
+        // with the unified sync) — neither is needed any more. Assets (maps,
+        // tokens, glTF) load from the user's own Nextcloud Files, i.e. this
+        // origin; image/media stay permissive because a map URL may legitimately
+        // point at any same-origin Files path and older scenes may reference
+        // absolute asset URLs.
         $csp = new ContentSecurityPolicy();
-        $csp->addAllowedFrameDomain('*');          // addon iframes (sandboxed)
-        $csp->addAllowedFrameDomain('blob:');      // addon UIs are loaded as blob: URLs
-        $csp->addAllowedConnectDomain('*');        // WS relay + asset CDNs
         $csp->addAllowedImageDomain('*');
         $csp->addAllowedMediaDomain('*');
         $csp->addAllowedWorkerSrcDomain("'self'");

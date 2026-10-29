@@ -47,8 +47,8 @@ return [
         ['name' => 'asset#file', 'url' => '/api/assets/file', 'verb' => 'GET'],
         ['name' => 'asset#thumbnail', 'url' => '/api/assets/thumbnail', 'verb' => 'GET'],
 
-        // Live room: issue a short-lived token for the WS relay; poll fallback.
-        ['name' => 'room#token', 'url' => '/api/scenes/{id}/room-token', 'verb' => 'POST'],
+        // Live room: handshake (role/permissions/cache) + built-in message sync.
+        ['name' => 'room#handshake', 'url' => '/api/scenes/{id}/room-token', 'verb' => 'POST'],
         ['name' => 'room#poll', 'url' => '/api/room/poll', 'verb' => 'GET'],
         ['name' => 'room#push', 'url' => '/api/room/push', 'verb' => 'POST'],
     ],

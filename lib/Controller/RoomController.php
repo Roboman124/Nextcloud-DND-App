@@ -12,37 +12,34 @@ use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\OCSController;
-use OCP\IConfig;
 use OCP\ICacheFactory;
 use OCP\IRequest;
 
 /**
- * Real-time room relay over Nextcloud's distributed cache.
+ * Real-time room sync over Nextcloud's distributed cache — the app's single
+ * multiplayer transport.
  *
- * Multiplayer needs low-latency fan-out of small messages (token moved, pointer
- * position, dice rolled). A dedicated WebSocket service (server/relay.js) is the
- * lowest-latency option, but it means running another process. To make
- * multiplayer work out of the box with nothing extra deployed, this controller
- * implements the long-poll fallback the SyncClient already knows how to use:
+ * Multiplayer needs fan-out of small messages (token moved, pointer position,
+ * dice rolled). This controller implements it entirely inside Nextcloud, with
+ * nothing extra to deploy:
  *
- *   - token() : authorise the caller for a scene's room and hand back a token.
- *               relayUrl is returned empty so the client uses polling.
- *   - push()  : append a message to the room's ring buffer in the cache.
- *   - poll()  : return messages newer than the caller's cursor.
+ *   - handshake() : authorise the caller for a scene's room and return their
+ *                   role, the campaign's permissions and cache availability.
+ *   - push()      : validate the message against the caller's permissions, then
+ *                   append it to the room's message buffer in the cache.
+ *   - poll()      : return messages newer than the caller's cursor.
  *
- * Messages live in a distributed cache (Redis/APCu) with a short TTL — this is
- * transient presence/movement data, not durable state. Durable scene state is
- * saved separately via SceneController. If you later run the WS relay, point
- * GRIMOIRE_RELAY_URL at it and token() will return it instead.
+ * Messages live in a distributed cache (Redis/APCu — bundled with AIO) with a
+ * short TTL: transient movement/presence data, not durable state. Durable scene
+ * state is saved separately via SceneController.
  *
  * Discord side-effects: when a dice roll or player join flows through push(),
  * and the campaign has those Discord events enabled, we forward them to the
- * webhook. This is the "wire it up so it fires once sync lands" piece.
+ * webhook.
  */
 class RoomController extends OCSController {
     private const TTL = 120;            // seconds a message survives in cache
     private const MAX_MESSAGES = 200;   // ring buffer cap per room
-    private const TOKEN_TTL = 120;      // seconds a signed room token is valid
 
     public function __construct(
         IRequest $request,
@@ -50,7 +47,6 @@ class RoomController extends OCSController {
         private CampaignMapper $campaignMapper,
         private DiscordService $discord,
         private ICacheFactory $cacheFactory,
-        private IConfig $config,
         private ?string $userId,
     ) {
         parent::__construct(Application::APP_ID, $request);
@@ -58,62 +54,27 @@ class RoomController extends OCSController {
 
     /**
      * POST /api/scenes/{id}/room-token
-     * Verifies the caller can access the scene, returns a short-lived,
-     * HMAC-signed room token the WebSocket relay can verify without a DB hit.
-     * relayUrl is empty unless a WS relay is configured, so the client polls
-     * by default; when a relay is configured, token() is the trust anchor.
+     * Room handshake: verifies the caller can access the scene and returns the
+     * caller's role, the campaign's per-layer permissions, and whether a
+     * distributed cache is available (multiplayer needs one). Polling needs no
+     * token — every push/poll request is authenticated by Nextcloud itself.
      */
     #[NoAdminRequired]
-    public function token(int $id): JSONResponse {
+    public function handshake(int $id): JSONResponse {
         $scene = $this->accessibleSceneOr404($id);
         if ($scene instanceof JSONResponse) {
             return $scene;
         }
-        $roomId = 'scene-' . $id;
-        $user = $this->userId ?? 'anon';
-        $relayUrl = getenv('GRIMOIRE_RELAY_URL') ?: '';
 
-        // Mint a signed, short-lived token: "<roomId>.<userId>.<sig>.<exp>".
-        // The relay verifies the signature against the same shared secret
-        // (GRIMOIRE_RELAY_SECRET) and rejects expired tokens, so it never needs
-        // to talk to the DB to authenticate a connection.
-        $token = $this->mintRoomToken($roomId, $user);
-
-        // Probe the distributed cache: poll-mode multiplayer relies on it, and a
+        // Probe the distributed cache: multiplayer relies on it, and a
         // local-only (non-distributed) cache silently drops cross-request data.
         $cacheOk = $this->cacheFactory->isAvailable();
 
         return new JSONResponse([
-            'token' => $token,
-            'roomId' => $roomId,
-            'relayUrl' => $relayUrl, // empty -> SyncClient uses long-poll
             'syncBackend' => $cacheOk ? 'cache' : 'none',
             'role' => $this->roleFor($scene->getCampaignId()),
             'permissions' => $this->permissionsFor($scene->getCampaignId()),
         ]);
-    }
-
-    /**
-     * Build "<roomId>.<userId>.<sig>.<exp>" where sig = HMAC-SHA256(secret,
-     * "<roomId>.<userId>.<exp>") truncated to 32 hex chars. TTL is 2 minutes
-     * so a token is only good for the brief window after the browser requests
-     * it. If no secret is configured, falls back to the unsigned dev form so
-     * the relay's GRIMOIRE_DEV_TRUST=1 mode still works for local dev.
-     */
-    private function mintRoomToken(string $roomId, string $user): string {
-        $secret = (string) $this->config->getAppValue(Application::APP_ID, 'relay_secret', '');
-        if ($secret === '') {
-            $secret = getenv('GRIMOIRE_RELAY_SECRET') ?: '';
-        }
-        $exp = time() + self::TOKEN_TTL;
-        if ($secret === '') {
-            // No secret configured: return the legacy unsigned dev form so a
-            // relay running in DEV_TRUST mode still accepts it.
-            return $roomId . '.' . $user;
-        }
-        $payload = $roomId . '.' . $user . '.' . $exp;
-        $sig = hash_hmac('sha256', $payload, $secret, false);
-        return $payload . '.' . substr($sig, 0, 32);
     }
 
     /**

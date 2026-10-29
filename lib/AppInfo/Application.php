@@ -22,7 +22,7 @@ class Application extends App implements IBootstrap {
 
     public function register(IRegistrationContext $context): void {
         // Register event listeners, capabilities, or middleware here as the
-        // app grows (e.g. a Capabilities provider advertising the WS relay URL).
+        // app grows.
     }
 
     public function boot(IBootContext $context): void {

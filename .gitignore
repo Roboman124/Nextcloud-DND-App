@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-server/node_modules/
 
 # Build output is committed for release tarballs but ignored during dev.
 # If you prefer to commit built assets (so the app runs without a build step),

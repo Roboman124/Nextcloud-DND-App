@@ -224,7 +224,7 @@ export default {
       diceRoller: null,
       roster: [],
       toast: null, measureUnit: 'ft', aoeShape: 'circle',
-      party: [], saving: false, saved: false, syncReady: false, remoteDice: null,
+      party: [], saving: false, saved: false, remoteDice: null,
       measureLabel: null,
       snapEnabled: true,
       buildShape: 'box', buildColor: '#6b5d4f', buildHeight: 1,
@@ -342,8 +342,8 @@ export default {
 
     /**
      * Rich text is user content and can arrive from ANY member of the room
-     * (peer-to-peer messages are not re-validated by the relay) or from a
-     * previously-persisted note — everything is sanitized before rendering
+     * or from a previously-persisted note — everything is sanitized before
+     * rendering
      * and before it is kept locally. DOMPurify's default profile strips
      * scripts, event handlers and javascript:/data: URLs; the editor's
      * formatting vocabulary (headings/colour/lists/links) survives.
@@ -471,26 +471,27 @@ export default {
         const { data } = await axios.post(
           generateUrl(`/apps/grimoire/api/scenes/${this.sceneId}/room-token`));
         this.sync = new SyncClient({
-          url: data.relayUrl, roomToken: data.token, userId: this.userId,
           sceneId: this.sceneId,
+          userId: this.userId,
+          // Engine code must not hardcode Nextcloud URL shapes: build the
+          // room endpoints webroot-aware (works in subdirectory installs).
+          apiUrl: (p) => generateUrl(p),
           onMessage: (m) => this.onRemote(m),
           onPresence: (players) => { this.party = players || []; },
         });
         this.sync.connect();
-        this.syncReady = true;
         if (data.role) this.role = data.role;
         if (data.permissions) {
           this.permissions = data.permissions;
           this.applyPermissionGating();
         }
-        if (data.syncBackend === 'none' && !data.relayUrl) {
+        if (data.syncBackend === 'none') {
           this._notify('Multiplayer needs a memory cache (Redis/APCu) configured in Nextcloud — running local-only for now.');
         }
       } catch (e) {
-        // Token endpoint missing or access denied — local-only mode.
+        // Handshake failed (missing endpoint or access denied) — local-only.
         // eslint-disable-next-line no-console
         console.warn('[grimoire] sync unavailable, running local-only', e);
-        this.syncReady = false;
       }
     },
 

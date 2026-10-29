@@ -6,8 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite build --mode development --watch",
-    "build": "vite build && node -e \"const fs=require('fs');fs.mkdirSync('css',{recursive:true});fs.copyFileSync('js/grimoire-style.css','css/grimoire-style.css')\"",
-    "demo": "vite preview --port 5180 || npx serve ."
+    "build": "vite build && node -e \"const fs=require('fs');fs.mkdirSync('css',{recursive:true});fs.copyFileSync('js/grimoire-style.css','css/grimoire-style.css')\""
   },
   "dependencies": {
     "@nextcloud/axios": "^2.5.0",

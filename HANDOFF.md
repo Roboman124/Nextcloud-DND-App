@@ -8,7 +8,7 @@
 > live on `CampaignController::players` (PUT, GM-only, validated, sends an
 > invite email) and `CampaignController::permissions`; both carry raw-body
 > fallbacks for the known body-binding issue on PUT. `SyncClient` degrades to
-> long-polling when the relay is unreachable and takes an injected `apiUrl`.
+> a single built-in transport (push + 1 s poll) and takes an injected `apiUrl`.
 > New dependency: `@nextcloud/dialogs`. Token docs are per-kind native
 > (2D pixels / 3D world units) — old dual-mode docs are migrated best-effort
 > in `Room._migrateToken`.
@@ -21,103 +21,72 @@ for design rationale and `README.md` for run/build commands.
 
 ## How to run it (verify before changing anything)
 
-- **Standalone engine demo (fastest):** serve over HTTP and open `/demo.html`.
-  `npx serve .` then visit the printed URL + `/demo.html`. It pulls
-  three@0.160 / cannon-es@0.20 / konva@9.3 from jsdelivr via an import map and
-  imports the real `src/engine` modules. Needs network access to jsdelivr.
-  `file://` will NOT work (ES modules). There is an on-screen red error overlay
-  if anything fails.
 - **As a Nextcloud app:** folder MUST be named `grimoire` (matches app id in
   `appinfo/info.xml`). `npm install && npm run build` → outputs
-  `js/grimoire-main.js` (Vite IIFE lib build). Then `php occ app:enable grimoire`.
-  Targets Nextcloud 28–31, PHP namespace `Grimoire`, OCP API.
-- **Relay (optional, for live multiplayer):** `cd server && npm install &&
-  npm run dev` (runs with `GRIMOIRE_DEV_TRUST=1`, accepting unsigned tokens).
+  `js/grimoire-main.js` (Vite IIFE build). Then `php occ app:enable grimoire`.
+  Targets Nextcloud 28–35, PHP namespace `Grimoire`, OCP API. The app runs only
+  inside Nextcloud — there is no standalone harness.
+- **Live multiplayer is built in** — room messages go through the app's own
+  push/poll endpoints backed by Nextcloud's distributed cache (Redis/APCu; AIO
+  ships Redis). No relay process or shared secret to configure.
 
 ## Architecture in one paragraph
 
-Campaign → Scene → live Room. The **engine** (`src/engine`, `src/tools`,
-`src/addons`) is framework-agnostic and dependency-injected (THREE, CANNON,
-Konva are passed in), so the identical modules run in both the Nextcloud Vue
-bundle and `demo.html`. **2D mode** = Konva (`Scene2D`); **3D mode** = three.js
-(`Scene3D`); **dice physics** = cannon-es (`DiceRoller`), sharing the 3D scene's
-physics world. The key seam is `SceneAdapter` (`Scene2DAdapter` /
-`Scene3DAdapter`): tools speak world-points and verbs (showPointer, moveToken,
-setAoE, showMeasurement) and each mode supplies an adapter, so **one tool
-codebase works in both modes**. Real-time sync is a standalone WebSocket relay
-(`server/relay.js`, dumb fan-out) with a long-poll fallback to a Nextcloud
-endpoint; durable scene state is JSON on the Scene DB row. Addons mirror
-Owlbear: `manifest.json` → sandboxed iframe → permissioned `postMessage` bridge
-exposing the `GRIM` SDK.
+Campaign → Scene → live Room, where a room is **2D or 3D, chosen at creation**.
+The **engine** (`src/engine`, `src/tools`) is framework-agnostic and
+dependency-injected (THREE, CANNON, Konva are passed in). **2D** = Konva
+(`Scene2D`); **3D** = three.js (`Scene3D`); **dice physics** = cannon-es
+(`DiceRoller`), sharing the 3D scene's physics world in 3D rooms and using a
+private viewport in 2D rooms. The key seam is `SceneAdapter`
+(`Scene2DAdapter` / `Scene3DAdapter`): tools speak world-points and verbs
+(showPointer, moveToken, setAoE, showMeasurement) and each mode supplies an
+adapter, so **one tool codebase works in both modes**. Sync is built in:
+`SyncClient` pushes to `/api/room/push` and polls `/api/room/poll` once a second;
+`RoomController` enforces permissions and fans out through the cache. Durable
+scene state is the JSON document on the Scene row. The sandboxed-iframe addon
+system was removed in 0.7.1; features ship in the core.
 
 ## File map (where to work)
 
 - `src/views/Room.vue` — **the integration point.** Loads a scene, instantiates
-  Scene2D + Scene3D + DiceRoller (shared world), both adapters, ToolManager,
-  SyncClient, AddonManager. Start here to understand runtime wiring.
-- `src/engine/3d/DiceRoller.js` — physics dice; see dice issue below.
-- `src/engine/3d/Scene3D.js` — three renderer, glTF token loading, AoE templates.
-- `src/engine/2d/Scene2D.js` — Konva stage, layers incl. a fog layer (no brush yet).
+  the room's single engine + adapter, ToolManager, SyncClient, DM panel, dice
+  panel. Start here to understand runtime wiring.
+- `src/engine/3d/DiceRoller.js` — physics dice (geometry + face maps + settle).
+- `src/engine/3d/Scene3D.js` — three renderer, glTF loading, tokens, blocks,
+  fog/drawings overlays, selection ring.
+- `src/engine/2d/Scene2D.js` — Konva stage, layers, fog, drawings, measurement.
 - `src/engine/SceneAdapter.js` — the one-tool-two-modes seam.
-- `src/engine/sync/SyncClient.js` — WS client + polling fallback.
-- `src/tools/ToolManager.js` — pointer / grab / measure / AoE tools.
-- `src/addons/AddonManager.js` + `src/addons/sdk/grimoire-sdk.js` — addon host + guest SDK.
-- `examples/initiative-tracker/` — complete working example addon.
-- `lib/Controller/` — `PageController`, `CampaignController`, `SceneController`.
+- `src/engine/sync/SyncClient.js` — built-in room sync (push + 1 s poll).
+- `src/tools/ToolManager.js` — pointer / grab / measure / AoE / draw / fog / build.
+- `lib/Controller/` — `PageController`, `CampaignController`, `SceneController`,
+  `RoomController` (sync), `SessionController`, `UserController`, `AssetController`.
 - `lib/Db/` — Campaign + Scene entities & QBMappers; `lib/Migration/` — schema.
-- `server/relay.js` — reference WebSocket relay.
 
 ## Known issues / correctness gaps (read before refining)
 
-1. **Dice face calibration (highest-value correctness fix).** In
-   `DiceRoller.js`, the d6 face→value map is exact. d8/d12/d20 are derived by
-   clustering coplanar triangles and are **not canonically numbered** (the
-   physics and settle-detection are correct, but which number a settled face
-   reports is not the standard die layout). d10 is **approximated** and needs a
-   proper pentagonal trapezohedron. Fix: build correct geometry per die with
-   hard-coded face→value maps like d6 has, then verify visually.
-2. **`RoomController` does not exist yet**, but `appinfo/routes.php` references
-   `room#token`, `room#poll`, `room#push`. Nextcloud resolves controllers
-   lazily so the app still enables, but the SyncClient's polling fallback
-   (`GET /api/room/poll`) will 404 until you add `lib/Controller/RoomController.php`.
-   This is also what blocks genuinely-live multiplayer: the relay
-   (`server/relay.js`) expects HMAC-signed `"<roomId>.<userId>.<sig>"` tokens
-   minted by `RoomController::token` using a shared secret. Until then the relay
-   only runs in `GRIMOIRE_DEV_TRUST=1` mode.
-3. **Fog of war is scaffolded, not implemented.** `Scene2D` has a dedicated fog
-   layer but there is no reveal/hide brush tool. (Owlbear's signature feature.)
-4. **No asset library.** glTF/GLB models and map/token images are loaded by URL
-   only; there is no Nextcloud Files picker or upload UI. This is the
-   self-hosting payoff and should be early.
-5. **No player sharing / roles.** Everything is owner-scoped (`ownedOr404` /
-   `accessibleOr404` guards). There is no GM-vs-player permission model or
-   campaign invitations yet.
-6. **PHP is hand-validated, not lint-tested** (no PHP runtime in the build env
-   where this was scaffolded). Run `php -l` across `lib/` and stand up a real
-   Nextcloud instance to validate the backend end-to-end.
-7. **Placeholders to replace:** `<author>` and the GitHub `<bugs>` URL in
-   `appinfo/info.xml`.
+1. **Dice face calibration.** d4, d6 and d10 are exact and canonical; d8/d12/d20
+   still derive their face→value maps by clustering coplanar triangles — valid
+   and stable, but not matched to the standard die layout. Fix: hard-code the
+   face maps like d6/d4, verify visually per die.
+2. **Sync is a 1 s poll** — needs a distributed cache (Redis/APCu) for
+   multiplayer; without one rooms run local-only and the UI says so.
+3. **PHP is hand-validated, not lint-tested** in this environment. Run `php -l`
+   across `lib/` and test on the live Nextcloud instance.
+4. **UI polish pending** — Owlbear-style layout pass, first-run empty state,
+   token context menus (the user is reviewing redesigns).
 
 ## Suggested refinement order
 
-1. Add `RoomController` (token signing + poll/push) so the routes resolve and
-   multiplayer goes live against `server/relay.js`. Highest leverage.
-2. Calibrate dice geometry + face maps (issue #1), verify visually in `demo.html`.
-3. Fog of war: a paintable mask on the Scene2D fog layer + a reveal/hide tool.
-4. Nextcloud Files asset library: pick/upload maps, tokens, and glTF models.
-5. Player sharing & roles (GM vs player), campaign invites.
-6. Drawing tools (freehand/shapes/text) and notes.
-7. Addon store: a curated `extensions.json` + in-app installer browser.
+1. Dice face-map calibration for d8/d12/d20 (issue #1).
+2. UI polish pass (pending redesign review).
+3. Casting — screen-cast the scene to remote viewers.
 
 ## Conventions to preserve
 
 - Keep the engine **framework-agnostic and dependency-injected** — do not import
-  three/cannon/konva directly in `src/engine`; they are passed in. This is what
-  lets `demo.html` and the Nextcloud bundle share code.
+  three/cannon/konva directly in `src/engine`; they are passed in.
 - New tools should go through `SceneAdapter` verbs so they work in both 2D and
   3D, rather than touching Scene2D/Scene3D directly.
-- New addon capabilities must be gated in `AddonManager`'s permission map and
-  declared in the addon's `manifest.json` — nothing granted by default.
 - App id, folder name, and `info.xml` `<id>` must all stay `grimoire`; the built
   bundle must stay `js/grimoire-main.js` (matches `PageController` addScript and
   `vite.config.js`).

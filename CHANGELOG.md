@@ -4,6 +4,38 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.8.0] - 2026-10-29
+
+Consolidation release: one way to run the app, one multiplayer transport.
+
+### Removed
+- **The standalone demo harness** (`demo.html`, its npm script). Grimoire runs
+  only as a Nextcloud app — the README, CONTRIBUTING, ARCHITECTURE and HANDOFF
+  docs now describe a single install path.
+- **The WebSocket relay** (`server/`) and its whole configuration surface:
+  `GRIMOIRE_RELAY_URL`, `GRIMOIRE_RELAY_SECRET` / the `relay_secret` app config,
+  HMAC-signed room tokens, and the unsigned dev-trust mode. The release tarball
+  no longer ships `server/`.
+- The iframe addon documentation that survived the 0.7.1 addon removal
+  (ARCHITECTURE §6 rewritten to describe the built-in replacement).
+
+### Changed
+- **One sync transport: the Nextcloud app itself.** `SyncClient` is now a
+  push + 1 s poll client over `/api/room/push|poll`; there is nothing extra to
+  deploy. `RoomController::handshake` (same endpoint URL) returns the caller's
+  role, campaign permissions and cache availability — every push is checked
+  against those permissions server-side, which the relay never did.
+- **Presence works again in the unified transport** (it existed only in relay
+  mode): parties are derived from room traffic plus a 30 s heartbeat, so the
+  player counter reflects who is actually in the room.
+- **First-batch replay guard**: joining a room no longer re-applies cached
+  stroke/draw messages from before you connected (previously could double-draw).
+- `Room.connectSync` now injects the webroot-aware `apiUrl`, fixing push/poll
+  URLs on Nextcloud installs served from a subdirectory.
+- **CSP narrowed**: the policy no longer allows arbitrary frame domains or
+  outbound connections (those exemptions existed for the removed addon iframes
+  and the relay).
+
 ## [0.7.11] - 2026-10-29
 
 Community feature request: manage placed 3D models.
