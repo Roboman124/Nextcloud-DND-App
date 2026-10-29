@@ -637,13 +637,20 @@ export default {
 
     // --- Selected-token edits (3D): rotate / scale / delete ---
 
+    /** Live token data from the engine. The tokens Map isn't Vue-reactive, so
+     * the `selectedToken` computed can go stale — edits must read fresh data,
+     * otherwise repeated clicks all start from the same old value. */
+    _liveSelected() {
+      if (!this.selectedTokenId) return null;
+      return this.engine?.tokens?.get(this.selectedTokenId)?.data || null;
+    },
     rotateSelected(deg) {
-      const t = this.selectedToken;
+      const t = this._liveSelected();
       if (!t) return;
       this._applyTokenEdit({ ...t, rotation: (t.rotation || 0) + (deg * Math.PI) / 180 });
     },
     scaleSelected(delta) {
-      const t = this.selectedToken;
+      const t = this._liveSelected();
       if (!t) return;
       const scale = Math.min(4, Math.max(0.4, (t.scale || 1) + delta));
       this._applyTokenEdit({ ...t, scale });
@@ -654,7 +661,7 @@ export default {
       this.sync?.send({ type: 'token:upsert', payload: data });
     },
     deleteSelected() {
-      const t = this.selectedToken;
+      const t = this._liveSelected();
       if (!t) return;
       if (!window.confirm(`Delete "${t.label || 'this token'}"?`)) return;
       this.scene2d?.removeToken(t.id);

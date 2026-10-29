@@ -100,8 +100,23 @@ export class PointerTool extends Tool {
 export class GrabTool extends Tool {
   constructor() { super('grab', 'Grab', 'hand'); }
   onActivate() { this.adapter.setTokensDraggable?.(true); }
-  onDeactivate() { this.adapter.setTokensDraggable?.(false); this.selected = null; this._grabOff = null; }
+  onDeactivate() { this.adapter.setTokensDraggable?.(false); this.selected = null; this._grabOff = null; this._rotate = null; }
   onPointerDown(w) {
+    // Rotation handle: dragging the selection ring spins the token instead of
+    // moving it (3D rooms — the adapter only reports a handle when a token is
+    // selected and the pointer is on/around its ring).
+    const handle = this.adapter.pickRotationHandle?.(w);
+    if (handle) {
+      const data = this.adapter.tokenData?.(handle.id);
+      this._rotate = {
+        id: handle.id,
+        cx: handle.x,
+        cz: handle.z,
+        startAng: Math.atan2((w.z ?? w.y) - handle.z, w.x - handle.x),
+        startRot: data?.rotation || 0,
+      };
+      return;
+    }
     const hit = this.adapter.pickToken?.(w);
     this.selected = hit || null;
     // Clicking a token selects it (the host shows a rotate/scale/delete bar);
@@ -120,11 +135,29 @@ export class GrabTool extends Tool {
       };
     }
   }
+  /** Ring-drag: rotation for the current pointer position. */
+  _rotationFor(w) {
+    const ang = Math.atan2((w.z ?? w.y) - this._rotate.cz, w.x - this._rotate.cx);
+    let delta = ang - this._rotate.startAng;
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+    return this._rotate.startRot + delta;
+  }
   onPointerMove(w) {
+    if (this._rotate) {
+      this.adapter.rotateToken?.(this._rotate.id, this._rotationFor(w));
+      return;
+    }
     if (!this.selected) return;
     this.adapter.moveToken?.(this.selected.id, this._grabPoint(w));
   }
   onPointerUp(w) {
+    if (this._rotate) {
+      const data = this.adapter.rotateToken?.(this._rotate.id, this._rotationFor(w));
+      if (data) this.sync?.send({ type: 'token:upsert', payload: data });
+      this._rotate = null;
+      return;
+    }
     if (!this.selected) return;
     // Snap only when the adapter has snapping enabled (toggleable in the UI);
     // snap the token's anchor (offset-adjusted), not the cursor.

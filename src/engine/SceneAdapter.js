@@ -323,6 +323,35 @@ export class Scene3DAdapter {
     this.onSelectToken?.(id || null);
   }
 
+  /** The data of a token by id (used by the rotate drag). */
+  tokenData(id) { return this.scene.tokens.get(id)?.data || null; }
+
+  /**
+   * Rotation handle: when a token is selected, the pointer landing on/around
+   * its selection ring returns {id, x, z} (the token centre) so the grab tool
+   * can spin it instead of moving it.
+   */
+  pickRotationHandle(w) {
+    const id = this.scene._selectedId;
+    if (!id || !w) return null;
+    const e = this.scene.tokens.get(id);
+    if (!e?.mesh) return null;
+    const cx = e.mesh.position.x, cz = e.mesh.position.z;
+    const d = Math.hypot(w.x - cx, (w.z ?? w.y) - cz);
+    // Ring geometry is 0.85–1.05 units; a tight band around the visible ring
+    // (clicking the model itself still moves it).
+    return (d >= 0.75 && d <= 1.15) ? { id, x: cx, z: cz } : null;
+  }
+
+  /** Set a token's Y rotation; returns its updated data for broadcasting. */
+  rotateToken(id, rotation) {
+    const e = this.scene.tokens.get(id);
+    if (!e?.data) return null;
+    const data = { ...e.data, rotation };
+    this.scene.upsertToken(data);
+    return data;
+  }
+
   // --- Fog of war (3D). The FogTool speaks these verbs in both modes; the
   // stroke store keeps the 2D-pixel format, so 3D strokes convert at these
   // edges and the saved/remote shapes stay cross-compatible.
