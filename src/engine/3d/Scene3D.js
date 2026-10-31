@@ -154,10 +154,11 @@ export class Scene3D {
         const d = { ...e.data };
         const m = e.mesh;
         if (m) {
-          const isModel = d.kind === 'model' && !m.userData?.loadFailed && m.userData?.isModelWrapper;
+          const groundAnchored = !!m.userData?.groundAnchored
+            || (d.kind === 'model' && !m.userData?.loadFailed && m.userData?.isModelWrapper);
           d.x = m.position.x;
           d.z = m.position.z;
-          d.y = isModel ? m.position.y : m.position.y - 0.9;
+          d.y = groundAnchored ? m.position.y : m.position.y - 0.9;
         }
         return d;
       }),
@@ -541,14 +542,30 @@ export class Scene3D {
           mesh.castShadow = true;
           mesh.userData.loadFailed = true;
         }
+      } else if (data.url) {
+        // Image token: a "standee" — the picture stands on a small coloured
+        // base, like a paper mini. Previously the URL was ignored here and the
+        // token rendered as a bare cylinder, which is why 3D image tokens only
+        // ever showed their base colour.
+        try {
+          const tex = await new THREE.TextureLoader().loadAsync(data.url);
+          // The token may have been removed while the picture streamed in.
+          if (this.tokens.get(data.id) !== entry) { tex.dispose(); return entry; }
+          tex.colorSpace = THREE.SRGBColorSpace;
+          if (this.renderer?.capabilities?.getMaxAnisotropy) {
+            tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+          }
+          mesh = this._buildStandee(data, tex);
+        } catch (err) {
+          if (this.tokens.get(data.id) !== entry) return entry;
+          // Fall back to the coloured cylinder rather than dropping the token;
+          // a missing/blocked image URL shouldn't make the mini disappear.
+          // eslint-disable-next-line no-console
+          console.warn('[grimoire] token image failed to load for', data.url, err);
+          mesh = this._cylinderToken(data);
+        }
       } else {
-        const geo = new THREE.CylinderGeometry(0.7, 0.7, 1.8, 24);
-        const mat = new THREE.MeshStandardMaterial({
-          color: new THREE.Color(data.color || '#8a6d3b'),
-          roughness: 0.6,
-        });
-        mesh = new THREE.Mesh(geo, mat);
-        mesh.castShadow = true;
+        mesh = this._cylinderToken(data);
       }
       mesh.userData.tokenId = data.id;
       this.scene.add(mesh);
@@ -566,17 +583,89 @@ export class Scene3D {
     return entry;
   }
 
+  /** The plain coloured token body (no image, or the image failed to load). */
+  _cylinderToken(data) {
+    const { THREE } = this;
+    const mesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.7, 0.7, 1.8, 24),
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color(data.color || '#8a6d3b'),
+        roughness: 0.6,
+      })
+    );
+    mesh.castShadow = true;
+    return mesh;
+  }
+
+  /**
+   * An image token: the picture stands upright on a small coloured base, the
+   * way a paper mini sits on a round base. The default camera looks down at
+   * ~39°, so a standee reads the picture at full height while a textured disc
+   * would squash it. The group is ground-anchored (origin at the base) so the
+   * usual move/rotate/scale transforms place it like a glTF model.
+   */
+  _buildStandee(data, tex) {
+    const { THREE } = this;
+    const group = new THREE.Group();
+    group.userData.groundAnchored = true;
+    group.userData.isImageStandee = true;
+
+    const base = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.7, 0.7, 0.12, 24),
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color(data.color || '#8a6d3b'),
+        roughness: 0.6,
+      })
+    );
+    base.position.y = 0.06;
+    base.castShadow = true;
+    base.receiveShadow = true;
+    group.add(base);
+
+    // Keep the picture's aspect ratio, fitting it into roughly one grid square
+    // wide and a mini's height tall, so portraits and wide crops both read.
+    const img = tex.image || {};
+    const iw = img.naturalWidth || img.width || 1;
+    const ih = img.naturalHeight || img.height || 1;
+    const fit = Math.min(1.5 / iw, 1.8 / ih);
+    const pw = Math.max(0.2, iw * fit);
+    const ph = Math.max(0.2, ih * fit);
+
+    const pic = new THREE.Mesh(
+      new THREE.PlaneGeometry(pw, ph),
+      new THREE.MeshStandardMaterial({
+        map: tex,
+        transparent: true,
+        // Transparent token PNGs would otherwise render as a solid rectangle
+        // (and swallow clicks around the figure) — discard the empty pixels.
+        alphaTest: 0.4,
+        side: THREE.DoubleSide,
+        roughness: 0.85,
+        metalness: 0,
+      })
+    );
+    pic.position.y = 0.12 + ph / 2; // stand the picture on the base
+    pic.receiveShadow = true;
+    pic.name = 'token-image';
+    group.add(pic);
+
+    return group;
+  }
+
   /** Position/rotate/scale a token mesh from its data. */
   _applyTokenTransform(entry, data) {
     const m = entry.mesh;
     if (!m || !data) return;
-    const isModel = data.kind === 'model' && !m.userData?.loadFailed && m.userData?.isModelWrapper;
+    // Models and image standees have their origin at the token's feet; plain
+    // cylinders are centre-anchored (h = 1.8, hence the +0.9 lift).
+    const groundAnchored = !!m.userData?.groundAnchored
+      || (data.kind === 'model' && !m.userData?.loadFailed && m.userData?.isModelWrapper);
     m.rotation.y = data.rotation || 0;
     // The wrapper's children carry the load-time normalisation, so scaling the
     // wrapper applies the user's scale cleanly (models included — it used to
     // be silently ignored for them).
     m.scale.setScalar(data.scale || 1);
-    if (isModel) {
+    if (groundAnchored) {
       m.position.set(data.x || 0, data.y || 0, data.z || 0);
     } else {
       // Primitives (cylinder h=1.8) and failed placeholders are centre-anchored:
@@ -645,6 +734,16 @@ export class Scene3D {
     const e = this.tokens.get(id);
     if (!e) return;
     this.scene.remove(e.mesh);
+    // Image standees own a texture and geometry per token; free them so a long
+    // session that adds and deletes image tokens doesn't leak VRAM.
+    if (e.mesh?.userData?.isImageStandee) {
+      e.mesh.traverse((o) => {
+        if (!o.isMesh) return;
+        o.geometry?.dispose();
+        o.material?.map?.dispose();
+        o.material?.dispose();
+      });
+    }
     this.tokens.delete(id);
   }
 
