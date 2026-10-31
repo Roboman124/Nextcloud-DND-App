@@ -4,6 +4,30 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.8.1] - 2026-10-31
+
+Bug-fix release for 3D image tokens.
+
+### Fixed
+- **3D tokens added with an attached image now show the picture.** The 3D
+  engine's non-model path never read `token.url`, so an image token rendered as
+  a bare token-coloured cylinder (2D rooms were unaffected — Konva loads the
+  image). Image tokens are now **standees**: the picture stands upright on a
+  small disc in the token's colour, like a paper mini on a round base.
+  Aspect ratio is preserved (fitted to ~1.5 × 1.8 units), textures load in sRGB
+  with anisotropic filtering, and `alphaTest` keeps transparent PNGs from
+  rendering a box or swallowing clicks. A failed image load falls back to the
+  coloured cylinder instead of dropping the token.
+- Standees are ground-anchored; `_applyTokenTransform` and `serialize()` now
+  honour that rather than centre-anchoring every non-model token, which would
+  have moved a standee 0.9 units down on each save.
+- `removeToken` disposes a standee's texture and geometry, so adding and
+  deleting image tokens no longer leaks VRAM.
+
+### Changed
+- The app's feature list in `info.xml` no longer advertises the addon/GRIM SDK
+  system that was removed in 0.7.1.
+
 ## [0.8.0] - 2026-10-29
 
 Consolidation release: one way to run the app, one multiplayer transport.
