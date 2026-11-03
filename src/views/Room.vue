@@ -824,9 +824,15 @@ export default {
     bindPointer() {
       const el = this.mode === '2d' ? this.$refs.stage2d : this.$refs.canvas3d;
       const adapter = this.adapters[this.mode];
-      const world = (e) => this.mode === '2d'
-        ? adapter.worldPointFromEvent()
-        : adapter.worldPointFromEvent(this.ndc(e));
+      const world = (e) => adapter.worldPointFromEvent(this.mode === '2d' ? e : this.ndc(e));
+      // The 2D adapter returns null until the stage has seen a pointer (the
+      // first click of a session can land on the toolbar, not the canvas).
+      const dispatch = (name, e) => {
+        const w = world(e);
+        if (!w) return null;
+        this.tools.handle(name, w);
+        return w;
+      };
       // Only left-click (button 0) goes to tools; right-click is used for orbit/pan.
       el.onpointerdown = (e) => {
         if (e.button === 0) {
@@ -836,21 +842,24 @@ export default {
             this.openTextEditor(e);
             return;
           }
-          this.tools.handle('onPointerDown', world(e));
+          dispatch('onPointerDown', e);
         }
       };
-      el.onpointermove = (e) => this.tools.handle('onPointerMove', world(e));
-      window.onpointerup = (e) => { if (e.button === 0) this.tools.handle('onPointerUp', world(e)); };
+      el.onpointermove = (e) => { dispatch('onPointerMove', e); };
+      // Window-level: a drag can be released outside the canvas and the tool
+      // still has to finish, or it stays stuck mid-drag.
+      window.onpointerup = (e) => { if (e.button === 0) dispatch('onPointerUp', e); };
       el.oncontextmenu = (e) => {
         e.preventDefault();
         // When the AoE or Build tool is active, right-click deletes the item
         // under the cursor. Otherwise right-click is left for camera orbit/pan.
-        if (this.activeTool === 'aoe' || this.activeTool === 'build' || this.activeTool === 'measure') this.tools.handle('onContext', world(e));
+        if (this.activeTool === 'aoe' || this.activeTool === 'build' || this.activeTool === 'measure') dispatch('onContext', e);
       };
       // GM double-click on a token opens the health editor.
       el.ondblclick = (e) => {
         if (e.button !== 0) return;
         const w = world(e);
+        if (!w) return;
         // Fog polygon mode: double-click closes the polygon.
         if (this.activeTool === 'fog') {
           this.tools.handle('onDoubleClick', w);
@@ -990,9 +999,7 @@ export default {
       // Place the editor at the click, in screen coords.
       this.textEditor = { x: e.clientX, y: e.clientY };
       this._textWorld = this.adapters[this.mode].worldPointFromEvent(
-        this.mode === '2d' ? undefined : this.ndc(e));
-      // For 2D we need the world point too (the stage transform gives it).
-      if (this.mode === '2d') this._textWorld = this.adapters['2d'].worldPointFromEvent();
+        this.mode === '2d' ? e : this.ndc(e));
     },
 
     onTextCommit({ html, text }) {
@@ -1105,13 +1112,23 @@ export default {
   pointer-events: none;
 }
 
-/* Contextual tool options (measure units, AoE shape) */
+/* Contextual tool options (measure units, AoE shape, fog controls…).
+   Centred inside the free area between the tool rail and the dice panel —
+   centring across the whole surface pushed the wide bars (fog has the most
+   controls) underneath the dice panel, which is a sibling with a higher
+   z-index, so its right-hand buttons could not be clicked at all. Wrapping
+   keeps every control reachable when the free area is narrow. */
 .tool-options {
-  position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+  position: absolute; bottom: 32px;
+  left: 76px; right: 366px; transform: none;
+  display: flex; align-items: center; justify-content: center;
+  flex-wrap: wrap; row-gap: 6px;
+  gap: 6px; padding: 6px 10px;
   background: var(--g-bg-dark, #0f1318); border: 1px solid var(--g-border, #2d3748);
   border-radius: 10px; z-index: 5;
 }
+/* Collapsed dice panel only occupies its toggle, so give the bar its space. */
+.surface:has(.dice-panel.collapsed) .tool-options { right: 76px; }
 .tool-options .opt-label { font-size: 11px; color: var(--g-text-dim, #8b949e);
   text-transform: uppercase; letter-spacing: .08em; margin-right: 2px; }
 .tool-options button {

@@ -180,7 +180,9 @@ export default {
 </script>
 
 <style scoped>
-.dm-panel { position: absolute; left: 0; top: 0; bottom: 0; z-index: 30; display: flex; align-items: flex-start; }
+/* Start clear of the tool rail (left: 12px, ~56px wide): at left: 0 the panel
+   covered the whole rail, so switching tools meant closing the panel first. */
+.dm-panel { position: absolute; left: 76px; top: 0; bottom: 0; z-index: 30; display: flex; align-items: flex-start; }
 .dm-toggle {
   margin: 14px 0 0 14px; width: 44px; height: 44px; border-radius: 50%;
   background: var(--g-bg-dark); border: 1px solid var(--g-border);

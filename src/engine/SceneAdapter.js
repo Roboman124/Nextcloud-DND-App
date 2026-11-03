@@ -21,10 +21,22 @@ export class Scene2DAdapter {
   get snapEnabled() { return this.scene.snapEnabled !== false; }
   set snapEnabled(v) { this.scene.snapEnabled = v; }
 
-  /** Convert a Konva stage event into world (scene) coordinates. */
-  worldPointFromEvent() {
+  /**
+   * Convert a Konva stage event into world (scene) coordinates.
+   *
+   * Konva only knows the pointer position once the stage itself has seen an
+   * event, so a click on the toolbar — or a drag released outside the canvas —
+   * leaves getPointerPosition() null. Feed the DOM event back in when we have
+   * one, and return null instead of throwing when there is still no position;
+   * callers skip the dispatch in that case.
+   */
+  worldPointFromEvent(evt) {
     const stage = this.scene.stage;
+    if (evt && typeof stage.setPointersPositions === 'function') {
+      stage.setPointersPositions(evt);
+    }
     const p = stage.getPointerPosition();
+    if (!p) return null;
     const t = stage.getAbsoluteTransform().copy().invert();
     const w = t.point(p);
     return { x: w.x, y: w.y };

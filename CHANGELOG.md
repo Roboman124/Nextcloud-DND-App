@@ -4,6 +4,30 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.8.2] - 2026-11-04
+
+Bug-fix release from a full pass over the app on a live Nextcloud 34 instance
+(both room kinds, dice, fog/draw/measure, HP, initiative, invites, permissions
+and live multiplayer).
+
+### Fixed
+- **Uncaught error on every click outside the canvas.** A window-level
+  `pointerup` handler asked Konva for a pointer position that only exists once
+  the stage has seen one, so toolbar and panel clicks threw
+  `TypeError: Cannot read properties of null (reading 'x')`. It also meant a drag
+  released over the toolbar threw before the tool's `onPointerUp`, leaving it
+  stuck mid-drag. The 2D adapter now feeds the DOM event back in and returns
+  `null` when there is still no position, and the room skips dispatch in that
+  case.
+- **Fog controls were unclickable with the dice panel open.** The contextual
+  tool bar was centred across the whole surface, so the wide fog bar (Hide all /
+  Reveal all) ran underneath the dice panel, which has a higher z-index. The bar
+  is now centred in the free area between the tool rail and the panel, wraps
+  when space is tight, and reclaims the space when the panel is collapsed.
+- **DM Controls covered the tool rail.** The panel started at the left edge,
+  so tools could not be switched while it was open; it now starts clear of the
+  rail.
+
 ## [0.8.1] - 2026-10-31
 
 Bug-fix release for 3D image tokens.
