@@ -4,6 +4,16 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.8.3] - 2026-11-14
+
+### Fixed
+- **3D ring-drag rotation went the wrong way** (issue #6). Dragging the blue
+  selection ring turned the token opposite to the pointer. The drag angle is
+  measured in world space, where the angle increases clockwise on screen, while
+  a positive `rotation.y` turns a token counter-clockwise as seen from above —
+  so the delta was applied with the wrong sign. The token now follows the
+  cursor. The 45° buttons are unchanged.
+
 ## [0.8.2] - 2026-11-04
 
 Bug-fix release from a full pass over the app on a live Nextcloud 34 instance
