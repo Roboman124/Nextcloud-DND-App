@@ -141,7 +141,12 @@ export class GrabTool extends Tool {
     let delta = ang - this._rotate.startAng;
     while (delta > Math.PI) delta -= Math.PI * 2;
     while (delta < -Math.PI) delta += Math.PI * 2;
-    return this._rotate.startRot + delta;
+    // Negated on purpose. Dragging the ring clockwise on screen increases the
+    // world angle — atan2(z, x) grows as z does, and +z points towards the
+    // camera, i.e. down the screen — but a positive rotation.y turns a token
+    // counter-clockwise as seen from above. Subtracting keeps the token
+    // following the cursor instead of fighting it.
+    return this._rotate.startRot - delta;
   }
   onPointerMove(w) {
     if (this._rotate) {
