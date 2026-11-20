@@ -8,7 +8,6 @@ build
 .releaseignore
 vite.config.js
 package-lock.json
-HANDOFF.md
 docs
 catalog
 .DS_Store

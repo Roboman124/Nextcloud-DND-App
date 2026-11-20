@@ -99,10 +99,18 @@ registers the tools, and connects sync.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — design, data model, and roadmap
 - [`CHANGELOG.md`](CHANGELOG.md) — version history
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev setup and conventions
-- [`HANDOFF.md`](HANDOFF.md) — working notes for the next development session
 
 ---
 
 ## License
 
 AGPL-3.0-or-later. See [`LICENSE`](LICENSE).
+
+---
+
+## AI disclosure
+
+Parts of Grimoire's code and documentation were produced with the assistance of
+AI coding tools. All changes are reviewed and released by the human maintainer,
+but AI-generated work can still contain mistakes — if major bugs or
+vulnerabilities are found, please let me know.
