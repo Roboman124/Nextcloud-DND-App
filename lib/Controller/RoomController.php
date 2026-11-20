@@ -41,6 +41,9 @@ class RoomController extends OCSController {
     private const TTL = 120;            // seconds a message survives in cache
     private const MAX_MESSAGES = 200;   // ring buffer cap per room
 
+    /** Per-request memo of liveTokenMeta(). */
+    private ?array $liveTokensCache = null;
+
     public function __construct(
         IRequest $request,
         private SceneMapper $sceneMapper,
@@ -91,11 +94,16 @@ class RoomController extends OCSController {
         // Fog of war is GM-only: a player must not be able to reveal/hide
         // terrain. Block any fog:* message from a non-GM.
         if (str_starts_with($type, 'fog:') && !$this->isGm($scene->getCampaignId())) {
-            return new JSONResponse(['error' => 'Fog is GM-only'], Http::STATUS_FORBIDDEN);
+            return new JSONResponse(['message' => 'Fog is GM-only', 'error' => 'Fog is GM-only'], Http::STATUS_FORBIDDEN);
         }
         // HP edits are GM-only: players see bars but can't change them.
         if ($type === 'token:hp' && !$this->isGm($scene->getCampaignId())) {
-            return new JSONResponse(['error' => 'HP is GM-only'], Http::STATUS_FORBIDDEN);
+            return new JSONResponse(['message' => 'HP is GM-only', 'error' => 'HP is GM-only'], Http::STATUS_FORBIDDEN);
+        }
+        // Grid config is GM-only: it comes out of the DM panel and reshapes the
+        // table for everyone (feet-per-square also rescales measurements).
+        if ($type === 'grid:config' && !$this->isGm($scene->getCampaignId())) {
+            return new JSONResponse(['message' => 'Grid is GM-only', 'error' => 'Grid is GM-only'], Http::STATUS_FORBIDDEN);
         }
 
         // Per-layer player permissions: a non-GM is blocked from create/update/
@@ -122,7 +130,7 @@ class RoomController extends OCSController {
                     $allowed = $tokenOwner !== null && $tokenOwner === $this->userId;
                 }
                 if (!$allowed) {
-                    return new JSONResponse(['error' => "Permission denied: {$layer}.{$action}"], Http::STATUS_FORBIDDEN);
+                    return new JSONResponse(['message' => "Permission denied: {$layer}.{$action}", 'error' => "Permission denied: {$layer}.{$action}"], Http::STATUS_FORBIDDEN);
                 }
             }
         }
@@ -230,16 +238,16 @@ class RoomController extends OCSController {
         try {
             $scene = $this->sceneMapper->find($id);
         } catch (DoesNotExistException) {
-            return new JSONResponse(['error' => 'Scene not found'], Http::STATUS_NOT_FOUND);
+            return new JSONResponse(['message' => 'Scene not found', 'error' => 'Scene not found'], Http::STATUS_NOT_FOUND);
         }
         // Access check: the caller must own the campaign OR be an invited player.
         try {
             $campaign = $this->campaignMapper->find($scene->getCampaignId());
         } catch (DoesNotExistException) {
-            return new JSONResponse(['error' => 'Campaign not found'], Http::STATUS_NOT_FOUND);
+            return new JSONResponse(['message' => 'Campaign not found', 'error' => 'Campaign not found'], Http::STATUS_NOT_FOUND);
         }
         if (!$this->canAccess($campaign)) {
-            return new JSONResponse(['error' => 'Forbidden'], Http::STATUS_FORBIDDEN);
+            return new JSONResponse(['message' => 'Forbidden', 'error' => 'Forbidden'], Http::STATUS_FORBIDDEN);
         }
         return $scene;
     }
@@ -291,18 +299,32 @@ class RoomController extends OCSController {
         return $out;
     }
 
-    /** Map a sync message type to [layer, action] for permission checks. */
+    /**
+     * Map a sync message type to [layer, action] for permission checks.
+     *
+     * EVERY state-changing type must appear here (or be GM-only above): a type
+     * without an entry bypasses the permission table entirely — map:add,
+     * map:move, map:scale, map:remove, grid:config and broadcast:initiative
+     * used to slip through ungated.
+     */
     private function layerActionFor(string $type): ?array {
         return match (true) {
             str_starts_with($type, 'token:upsert') => ['tokens', 'create'],
             str_starts_with($type, 'token:move') => ['tokens', 'update'],
             str_starts_with($type, 'token:remove') => ['tokens', 'delete'],
             str_starts_with($type, 'map:set') => ['maps', 'create'],
+            str_starts_with($type, 'map:add') => ['maps', 'create'],
+            str_starts_with($type, 'map:move') => ['maps', 'update'],
+            str_starts_with($type, 'map:scale') => ['maps', 'update'],
+            str_starts_with($type, 'map:remove') => ['maps', 'delete'],
             str_starts_with($type, 'draw:') => ['drawings', 'create'],
             str_starts_with($type, 'fog:') => ['fog', 'create'],
             str_starts_with($type, 'aoe:') => ['drawings', 'create'],
             str_starts_with($type, 'block:') => ['maps', 'create'],
             str_starts_with($type, 'measure:') => ['drawings', 'create'],
+            // Initiative is rebuilt from every token on the table and
+            // overwrites the shared order — same layer as the tokens it tracks.
+            str_starts_with($type, 'broadcast:initiative') => ['tokens', 'update'],
             default => null,
         };
     }
@@ -322,12 +344,59 @@ class RoomController extends OCSController {
         foreach ($this->sceneTokens($sceneId) as $t) {
             if (is_array($t) && ($t['id'] ?? null) === $id) return true;
         }
-        return false;
+        return isset($this->liveTokenMeta($sceneId)[$id]);
     }
 
-    /** Resolve a token's owner from the PERSISTED scene document. Never
-     * trusts client data: an unresolvable (or unowned/legacy) token is null,
-     * and the ownerOnly gate DENIES null — deny by default. */
+    /**
+     * Tokens on the table through live sync but not (yet) in the persisted
+     * scene: id => ['owner' => ?string]. The durable scene is the record, but
+     * create-vs-update and ownership must also see what is live — otherwise a
+     * player "creates" over someone else's unsaved token and hijacks it.
+     *
+     * Ownership comes from each token's FIRST sighting in the window (its
+     * creation upsert): a later message may not reassign it. If the window has
+     * rolled past the creation and ownership is unresolvable, the ownerOnly
+     * gate denies — deny by default, as on the persisted path.
+     */
+    private function liveTokenMeta(int $sceneId): array {
+        if ($this->liveTokensCache !== null) {
+            return $this->liveTokensCache;
+        }
+        $cache = $this->cacheFactory->createDistributed(Application::APP_ID . '-room-');
+        $current = (int) ($cache->get('scene-' . $sceneId . '-seq') ?? 0);
+        $out = [];
+        $from = max(1, $current - self::MAX_MESSAGES + 1);
+        for ($i = $from; $i <= $current; $i++) {
+            $m = $cache->get('scene-' . $sceneId . '-msg-' . $i);
+            if (!is_array($m)) {
+                continue;
+            }
+            $t = $m['type'] ?? '';
+            $p = $m['payload'] ?? null;
+            if (!is_array($p) || !isset($p['id']) || !is_string($p['id'])) {
+                continue;
+            }
+            $id = $p['id'];
+            if ($t === 'token:remove') {
+                unset($out[$id]);
+                continue;
+            }
+            if ($t !== 'token:upsert' && $t !== 'token:move') {
+                continue;
+            }
+            if (isset($out[$id])) {
+                continue; // first sighting is the creation — keep its owner
+            }
+            $owner = $p['owner'] ?? null;
+            $out[$id] = ['owner' => is_string($owner) && $owner !== '' ? $owner : null];
+        }
+        return $this->liveTokensCache = $out;
+    }
+
+    /** Resolve a token's owner from the PERSISTED scene document, falling back
+     * to the live table. Never trusts the incoming payload: an unresolvable
+     * (or unowned/legacy) token is null, and the ownerOnly gate DENIES null —
+     * deny by default. */
     private function tokenOwner(int $sceneId, $payload): ?string {
         if (!is_array($payload)) return null;
         $id = $payload['id'] ?? null;
@@ -337,6 +406,11 @@ class RoomController extends OCSController {
                 $owner = $t['owner'] ?? null;
                 return is_string($owner) && $owner !== '' ? $owner : null;
             }
+        }
+        $live = $this->liveTokenMeta($sceneId)[$id] ?? null;
+        if ($live !== null) {
+            $owner = $live['owner'] ?? null;
+            return is_string($owner) && $owner !== '' ? $owner : null;
         }
         return null;
     }

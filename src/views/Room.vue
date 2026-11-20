@@ -198,6 +198,7 @@
 import axios from '@nextcloud/axios';
 import DOMPurify from 'dompurify';
 import { generateUrl } from '../lib/url.js';
+import { diffDoc, cloneDoc } from '../lib/docDiff.js';
 import { loadState } from '@nextcloud/initial-state';
 import DicePanel from '../components/DicePanel.vue';
 import InitiativeTracker from '../components/InitiativeTracker.vue';
@@ -362,6 +363,9 @@ export default {
 
     hydrate(doc) {
       if (!doc) return;
+      // Pristine copy of the loaded document: saves diff against this so they
+      // carry only what changed here (see lib/docDiff.js).
+      this._baseDoc = cloneDoc(doc);
       if (this.mode === '2d') {
         if (doc.mapUrl) this._loadMap(doc.mapUrl);
         // Additional maps (multi-floor): reload each beyond the first.
@@ -451,10 +455,16 @@ export default {
         } else {
           doc = this.scene3d.serialize();
         }
+        // A save carries what CHANGED here, not the whole document: merging a
+        // full copy is how a client that hasn't seen the latest changes
+        // silently rolls them back (lost updates). The server merges this
+        // patch item-by-item under the campaign's permission table.
+        const patch = diffDoc(this._baseDoc || {}, doc);
         await axios.put(generateUrl(`/apps/grimoire/api/scenes/${this.sceneId}`), {
           name: this.scene?.name,
-          data: doc,
+          patch,
         });
+        this._baseDoc = cloneDoc(doc);
         this.saved = true;
         setTimeout(() => { this.saved = false; }, 2500);
       } catch (e) {
@@ -478,7 +488,25 @@ export default {
           apiUrl: (p) => generateUrl(p),
           onMessage: (m) => this.onRemote(m),
           onPresence: (players) => { this.party = players || []; },
+          onDenied: (status) => this.onSyncDenied(status),
+          onAck: (msg, seq) => this.onSendAck(msg, seq),
         });
+        // Local-edit bookkeeping for the receive-side rules in onRemote: every
+        // token message we send stamps its id (pointer capture), records the
+        // exact payload (echo staleness) and, once acked, its server seq
+        // (conflict resolution against remote edits).
+        const rawSend = this.sync.send.bind(this.sync);
+        this._localTouch = this._localTouch || new Map();
+        this._localSeq = this._localSeq || new Map();
+        this._localLatest = this._localLatest || new Map();
+        this.sync.send = (msg) => {
+          const id = msg?.payload?.id;
+          if (id && typeof id === 'string' && String(msg.type || '').startsWith('token:')) {
+            this._localTouch.set(id, Date.now());
+            this._localLatest.set(id, JSON.stringify(msg.payload));
+          }
+          return rawSend(msg);
+        };
         this.sync.connect();
         if (data.role) this.role = data.role;
         if (data.permissions) {
@@ -498,8 +526,38 @@ export default {
     /** Apply a remote change. A room only ever runs one engine, so every 2D-
      * only message no-ops in 3D rooms and vice versa. */
     onRemote(m) {
-      if (m.from === this.userId) return;
+      const own = m.from === this.userId;
+      const isTokenMsg = typeof m.type === 'string' && m.type.startsWith('token:');
+      // Own messages aren't echoed back (below) — except token ops. Those are
+      // idempotent by id and applying them in arrival (sequence) order is what
+      // makes both clients converge when several people edit one token: each
+      // side used to keep only the OTHER's final move and the views ended up
+      // swapped.
+      if (own && !isTokenMsg) return;
       const p = m.payload || {};
+      if (isTokenMsg && p.id) {
+        // Local capture: while the pointer is held down on a token we just
+        // edited, remote token ops for it are ignored — the dragger sees their
+        // own hand, not a tug-of-war. The drag's own final move has the
+        // highest seq and both sides settle on it.
+        if (this._capturing(p.id)) return;
+        const sig = JSON.stringify(p);
+        if (own) {
+          // An own echo is meaningful ONLY as a restore: if a stale remote
+          // message briefly regressed the token, re-applying my latest local
+          // edit undoes it. Any other own echo is by definition an OLDER edit
+          // of mine (messages arrive in sequence order) and applying it would
+          // regress state — a save in that window used to persist a lost
+          // rotate/scale step. The payload round-trips unchanged, so equality
+          // against the recorded latest edit is exact and clock-free.
+          if (this._localLatest?.get(p.id) !== sig) return;
+          this._localLatest.delete(p.id);
+        } else if ((this._localSeq?.get(p.id) || 0) > (Number(m.seq) || 0)) {
+          // Superseded: my own newer edit for this token already replaced what
+          // this message describes (each push acks its server-assigned seq).
+          return;
+        }
+      }
 
       if (m.type === 'token:move') {
         // Positional payload — merge so the token keeps its identity fields
@@ -605,6 +663,26 @@ export default {
       if (m.type === 'broadcast:initiative') {
         this.$refs.initTracker?.applyRemote?.(p);
       }
+    },
+
+    /** True while the local pointer is held down on a just-edited token. */
+    _capturing(id) {
+      return !!this._pointerDown && Date.now() - (this._localTouch?.get(id) || 0) < 1500;
+    },
+
+    /** Push ack: remember the server seq of each token edit this client made. */
+    onSendAck(msg, seq) {
+      const id = msg?.payload?.id;
+      if (id && typeof id === 'string' && String(msg.type || '').startsWith('token:')) {
+        this._localSeq.set(id, Math.max(this._localSeq.get(id) || 0, seq));
+      }
+    },
+
+    /** The server refused to sync (removed from the roster, scene deleted). */
+    onSyncDenied(status) {
+      this._notify(status === 404
+        ? 'This room is gone — it was deleted or closed.'
+        : 'You no longer have access to this room.');
     },
 
     applyMode() {
@@ -836,6 +914,7 @@ export default {
       // Only left-click (button 0) goes to tools; right-click is used for orbit/pan.
       el.onpointerdown = (e) => {
         if (e.button === 0) {
+          this._pointerDown = true;
           // The text tool opens an in-place rich text editor instead of a
           // prompt; intercept it here so we get screen coords for the overlay.
           if (this.activeTool === 'draw' && this.drawSub === 'text') {
@@ -848,7 +927,12 @@ export default {
       el.onpointermove = (e) => { dispatch('onPointerMove', e); };
       // Window-level: a drag can be released outside the canvas and the tool
       // still has to finish, or it stays stuck mid-drag.
-      window.onpointerup = (e) => { if (e.button === 0) dispatch('onPointerUp', e); };
+      window.onpointerup = (e) => {
+        if (e.button === 0) {
+          this._pointerDown = false;
+          dispatch('onPointerUp', e);
+        }
+      };
       el.oncontextmenu = (e) => {
         e.preventDefault();
         // When the AoE or Build tool is active, right-click deletes the item

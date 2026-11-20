@@ -175,7 +175,7 @@ class CampaignController extends OCSController {
             }
         }
         if ($add === '' && $remove === '') {
-            return new JSONResponse(['error' => 'add or remove uid is required'], Http::STATUS_BAD_REQUEST);
+            return new JSONResponse(['message' => 'add or remove uid is required', 'error' => 'add or remove uid is required'], Http::STATUS_BAD_REQUEST);
         }
 
         $data = json_decode($c->getData() ?? '{}', true) ?: [];
@@ -183,10 +183,10 @@ class CampaignController extends OCSController {
 
         if ($add !== '') {
             if ($add === $this->userId) {
-                return new JSONResponse(['error' => 'You already own this campaign'], Http::STATUS_BAD_REQUEST);
+                return new JSONResponse(['message' => 'You already own this campaign', 'error' => 'You already own this campaign'], Http::STATUS_BAD_REQUEST);
             }
             if (!$this->userManager->get($add)) {
-                return new JSONResponse(['error' => 'No such user'], Http::STATUS_BAD_REQUEST);
+                return new JSONResponse(['message' => 'No such user', 'error' => 'No such user'], Http::STATUS_BAD_REQUEST);
             }
             if (!in_array($add, $players, true)) {
                 $players[] = $add;
@@ -281,7 +281,7 @@ class CampaignController extends OCSController {
         if ($permissions === null) {
             // Still nothing — refuse rather than silently saving an all-true
             // table over the existing permissions.
-            return new JSONResponse(['error' => 'permissions object is required'], Http::STATUS_BAD_REQUEST);
+            return new JSONResponse(['message' => 'permissions object is required', 'error' => 'permissions object is required'], Http::STATUS_BAD_REQUEST);
         }
         $data = json_decode($c->getData() ?? '{}', true) ?: [];
         // Normalize: each layer is {create,update,delete} bools; default true
@@ -347,10 +347,10 @@ class CampaignController extends OCSController {
         try {
             $c = $this->mapper->find($id);
         } catch (DoesNotExistException) {
-            return new JSONResponse(['error' => 'not found'], Http::STATUS_NOT_FOUND);
+            return new JSONResponse(['message' => 'not found', 'error' => 'not found'], Http::STATUS_NOT_FOUND);
         }
         if ($c->getOwner() !== $this->userId) {
-            return new JSONResponse(['error' => 'forbidden'], Http::STATUS_FORBIDDEN);
+            return new JSONResponse(['message' => 'forbidden', 'error' => 'forbidden'], Http::STATUS_FORBIDDEN);
         }
         return $c;
     }

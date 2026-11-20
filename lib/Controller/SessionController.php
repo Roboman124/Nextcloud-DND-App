@@ -91,13 +91,13 @@ class SessionController extends OCSController {
         // Narrow to a single player for individual reminders.
         if ($player !== '') {
             if (!in_array($player, $players, true)) {
-                return new JSONResponse(['error' => 'Player not in campaign'], Http::STATUS_BAD_REQUEST);
+                return new JSONResponse(['message' => 'Player not in campaign', 'error' => 'Player not in campaign'], Http::STATUS_BAD_REQUEST);
             }
             $players = [$player];
         }
 
         if (empty($players)) {
-            return new JSONResponse(['error' => 'No players to notify'], Http::STATUS_BAD_REQUEST);
+            return new JSONResponse(['message' => 'No players to notify', 'error' => 'No players to notify'], Http::STATUS_BAD_REQUEST);
         }
 
         $when = $this->formatWhen($sessionAt);
@@ -178,10 +178,10 @@ class SessionController extends OCSController {
         try {
             $campaign = $this->mapper->find($id);
         } catch (DoesNotExistException) {
-            return new JSONResponse(['error' => 'Campaign not found'], Http::STATUS_NOT_FOUND);
+            return new JSONResponse(['message' => 'Campaign not found', 'error' => 'Campaign not found'], Http::STATUS_NOT_FOUND);
         }
         if ($campaign->getOwner() !== $this->userId) {
-            return new JSONResponse(['error' => 'Forbidden'], Http::STATUS_FORBIDDEN);
+            return new JSONResponse(['message' => 'Forbidden', 'error' => 'Forbidden'], Http::STATUS_FORBIDDEN);
         }
         return $campaign;
     }

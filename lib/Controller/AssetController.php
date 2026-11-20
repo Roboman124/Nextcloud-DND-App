@@ -48,15 +48,15 @@ class AssetController extends OCSController {
         try {
             $userFolder = $this->rootFolder->getUserFolder($this->userId);
         } catch (\Throwable $e) {
-            return new JSONResponse(['error' => 'No user folder'], Http::STATUS_NOT_FOUND);
+            return new JSONResponse(['message' => 'No user folder', 'error' => 'No user folder'], Http::STATUS_NOT_FOUND);
         }
 
         try {
             $node = $path === '/' ? $userFolder : $userFolder->get($path);
         } catch (NotFoundException) {
-            return new JSONResponse(['error' => 'Not found', 'path' => $path], Http::STATUS_NOT_FOUND);
+            return new JSONResponse(['message' => 'Not found', 'path' => $path, 'error' => 'Not found', 'path' => $path], Http::STATUS_NOT_FOUND);
         } catch (\Throwable $e) {
-            return new JSONResponse(['error' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
+            return new JSONResponse(['message' => $e->getMessage(), 'error' => $e->getMessage()], Http::STATUS_BAD_REQUEST);
         }
 
         $files = [];

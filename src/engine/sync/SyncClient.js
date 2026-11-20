@@ -15,11 +15,13 @@
  * built through an injected `apiUrl(path)` (see Room.vue).
  */
 export class SyncClient {
-  constructor({ sceneId, userId, apiUrl, onMessage, onPresence }) {
+  constructor({ sceneId, userId, apiUrl, onMessage, onPresence, onDenied, onAck }) {
     this.sceneId = sceneId;
     this.userId = userId;
     this.onMessage = onMessage || (() => {});
     this.onPresence = onPresence || (() => {});
+    this.onDenied = onDenied || (() => {});
+    this.onAck = onAck || (() => {});
     this.apiUrl = apiUrl || ((p) => '/index.php' + p);
     this.connected = false;
     this._closed = false;
@@ -50,17 +52,34 @@ export class SyncClient {
         `${this.apiUrl('/apps/grimoire/api/room/poll')}?sceneId=${encodeURIComponent(this.sceneId)}&since=${cursor}`,
         { headers: { 'OCS-APIRequest': 'true', requesttoken: window.OC?.requestToken || '' } }
       );
-      const data = await res.json();
-      if (data.reset) {
+      const text = await res.text();
+      let data = null;
+      try { data = JSON.parse(text); } catch { /* XML envelope or empty */ }
+      // Access revoked or scene deleted: stop syncing and tell the user once
+      // instead of hammering the endpoint at 1 request/second forever. A
+      // refusal can arrive as HTTP 200 wrapped in an OCS envelope (XML or
+      // JSON) with the real status inside, so read it from there too.
+      const xmlCode = Number((text.match(/<statuscode>(\d+)<\/statuscode>/) || [])[1] || 0);
+      const ocsCode = Number(data?.ocs?.meta?.statuscode) || xmlCode || res.status;
+      if (res.status === 403 || res.status === 404 || ocsCode === 401 || ocsCode === 403 || ocsCode === 404) {
+        this._closed = true;
+        this.connected = false;
+        this.onDenied(ocsCode || res.status);
+        return;
+      }
+      if (data && data.reset) {
         // Server buffer was cleared/expired; resync cursor, don't replay.
         cursor = data.cursor || 0;
-      } else {
+      } else if (data) {
         const now = Date.now();
         for (const m of data.messages || []) {
           // Don't echo our own messages back to us — but do count them for
-          // presence/activity bookkeeping below.
+          // presence/activity bookkeeping below. Token ops are the exception:
+          // applying those in arrival (sequence) order is what makes clients
+          // converge when several people edit one token (see Room.onRemote).
           if (m?.from) this._seen.set(m.from, Math.min(now, Number(m.t) || now));
-          if (m?.from === this.userId) continue;
+          const isTokenMsg = typeof m?.type === 'string' && m.type.startsWith('token:');
+          if (m?.from === this.userId && !isTokenMsg) continue;
           // First batch after connecting: skip messages that predate the join
           // (the cached window may hold old draw/fog strokes; re-applying them
           // would double-draw).
@@ -130,11 +149,18 @@ export class SyncClient {
   /** Send a message via the Nextcloud push endpoint. */
   async _push(msg) {
     try {
-      await fetch(this.apiUrl('/apps/grimoire/api/room/push'), {
+      const res = await fetch(this.apiUrl('/apps/grimoire/api/room/push'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'OCS-APIRequest': 'true', requesttoken: window.OC?.requestToken || '' },
         body: JSON.stringify({ sceneId: this.sceneId, type: msg.type, payload: msg.payload }),
       });
+      // The server assigns each message a monotonic seq. Acking it lets the
+      // receive side drop anything OLDER than our own latest edit (see
+      // Room.onRemote) — without it, a lagging echo of an earlier edit can
+      // regress state and a save can persist the regressed value.
+      const body = await res.json().catch(() => null);
+      const seq = Number(body?.seq) || 0;
+      if (seq) this.onAck(msg, seq);
     } catch { /* best-effort; the next tick/change will retry */ }
   }
 

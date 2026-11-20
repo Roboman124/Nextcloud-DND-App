@@ -4,6 +4,46 @@ All notable changes to Grimoire are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.8.4] - 2026-11-20
+
+Multiplayer hardening from a bug hunt across two accounts on a live Nextcloud
+instance (invites, live sync, permissions, concurrent editing, saves, session
+lifecycle). One compatibility fix, four permission/integrity fixes and two
+convergence fixes.
+
+### Fixed
+- **Every permission denial showed a raw 500 page on Nextcloud 35.** NC 35's
+  OCS middleware reads a `message` key when converting 401/403 responses and
+  raised a TypeError on Grimoire's `error`-only payloads. All error responses
+  now carry both keys, so denials are clean 403s again.
+- **A save could silently roll back other players' work.** Saves sent the
+  whole scene document, so a client holding stale state (dropped connection,
+  sync gap) wiped changes it had never seen. Saves now send only what changed,
+  merged item-by-item on the server.
+- **Player saves bypassed the per-item permission rules.** The live push gate
+  enforced ownerOnly/create/update/delete per token; the save path did not, so
+  a player could move, re-own or wipe the GM's tokens by saving. Both paths now
+  share the same rules, and denied items keep their stored version.
+- **Live tokens could be hijacked through the create path.** A token placed on
+  the table but not saved yet counted as "new", so another player could claim
+  its id (and ownership). Create-vs-update and ownership now consult the live
+  room too; the creator's ownership sticks and unknown owners are denied.
+- **Six sync message types skipped the permission table.** `map:add`,
+  `map:move`, `map:scale`, `map:remove`, `grid:config` and
+  `broadcast:initiative` had no gate at all — players could rearrange maps or
+  rewrite the grid regardless of campaign permissions. All are gated now;
+  grid config is GM-only.
+- **Simultaneous edits diverged.** When two people edited one token at once,
+  each client ended up showing the other's final move. Token messages now
+  resolve by server sequence against your own acknowledged edits, your own
+  echoes apply only as a restore of your latest edit (a lagging echo could
+  briefly regress state and a save in that window persisted a lost rotate or
+  scale step), and a held drag ignores remote ops on the dragged token.
+- **Removed players polled the room forever, silently.** A player kicked from
+  the roster or left with a deleted scene kept polling once a second with no
+  feedback. The client now stops and says so ("You no longer have access to
+  this room" / "This room is gone").
+
 ## [0.8.3] - 2026-11-14
 
 ### Fixed
